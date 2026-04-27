@@ -77,7 +77,7 @@ export default function CareCircleApp() {
       Notification.requestPermission().then(p => {
         if (p === 'granted') {
           setNotifPermission(true);
-          new Notification('🎉 CareCircle Notifications Enabled', { body: `You'll receive reminders for ${PATIENT.short}'s care.` });
+          new Notification('CareCircle Notifications Enabled', { body: `You will receive reminders for ${PATIENT.short}'s care.` });
         }
       });
     }
@@ -110,61 +110,213 @@ export default function CareCircleApp() {
 
   return (
     <>
+      {/* SOVEREIGN SHIELD MODAL */}
       {showModal && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 999, background: 'rgba(7,16,31,.96)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-          <div style={{ background: '#0c1a2e', border: '1px solid #00d4b8', borderRadius: 20, padding: 32, maxWidth: 480, width: '100%', textAlign: 'center', boxShadow: '0 0 60px rgba(0,212,184,.2)' }}>
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 999,
+          background: 'rgba(7,16,31,.96)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+        }}>
+          <div style={{
+            background: '#0c1a2e',
+            border: '1px solid #00d4b8',
+            borderRadius: 20,
+            padding: 32,
+            maxWidth: 480,
+            width: '100%',
+            textAlign: 'center',
+            boxShadow: '0 0 60px rgba(0,212,184,.2)',
+          }}>
+            {/* Glowing top bar */}
+            <div style={{ height: 2, background: 'linear-gradient(90deg,transparent,#00d4b8,#8060cc,#00d4b8,transparent)', borderRadius: 2, marginBottom: 24 }} />
+
             <div style={{ fontSize: 44, marginBottom: 12 }}>🛡️</div>
-            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 20, color: '#00d4b8', marginBottom: 8 }}>Child Data Protection Active</div>
-            <div style={{ fontSize: 13, color: '#7a9bbf', lineHeight: 1.75, marginBottom: 18 }}>
-              CareCircle hashes all patient identifiers, medication names, and family data at your device before any AI processing. {PATIENT.short}&apos;s care information never reaches a commercial server in readable form.
+
+            <div style={{
+              fontFamily: "'Playfair Display',serif",
+              fontSize: 20,
+              color: '#00d4b8',
+              marginBottom: 8,
+              fontWeight: 400,
+            }}>
+              Patient Data Protected
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, justifyContent: 'center', marginBottom: 22 }}>
-              {[['Eleanor Culwell', 'ZK:A4F2C891'], ['DOB:1948-03-12', 'ZK:B7E3D204'], ['MRN:CC-001', 'ZK:C1A9F563'], ['Metformin', 'ZK:D8B2E417']].map(([k, v], i) => (
-                <div key={i} style={{ background: 'rgba(0,212,184,.08)', border: '1px solid rgba(0,212,184,.2)', borderRadius: 6, padding: '4px 10px', fontFamily: T, fontSize: 10, color: '#00d4b8' }}>
-                  {k} <span style={{ color: '#7a9bbf', fontSize: 9 }}>{v}</span>
+
+            <div style={{ fontSize: 13, color: '#7a9bbf', lineHeight: 1.75, marginBottom: 18 }}>
+              CareCircle hashes all patient identifiers, medication names, and family data at your device before any AI processing.{' '}
+              {PATIENT.short}&apos;s care information never reaches a commercial server in readable form.
+            </div>
+
+            {/* Hash demo chips */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, justifyContent: 'center', marginBottom: 18 }}>
+              {[
+                ['Eleanor Culwell', 'ZK:A4F2C891'],
+                ['DOB:1948-03-12', 'ZK:B7E3D204'],
+                ['MRN:CC-001', 'ZK:C1A9F563'],
+                ['Metformin', 'ZK:D8B2E417'],
+              ].map(([k, v], i) => (
+                <div key={i} style={{
+                  background: 'rgba(0,212,184,.08)',
+                  border: '1px solid rgba(0,212,184,.2)',
+                  borderRadius: 6,
+                  padding: '4px 10px',
+                  fontFamily: T,
+                  fontSize: 10,
+                  color: '#00d4b8',
+                }}>
+                  {k}{' '}
+                  <span style={{ color: '#7a9bbf', fontSize: 9 }}>{v}</span>
                 </div>
               ))}
             </div>
-            <button onClick={() => setShowModal(false)} style={{ background: 'linear-gradient(135deg,#0d2e1e,#156040)', color: '#faf0dc', border: 'none', borderRadius: 10, padding: '13px 32px', fontFamily: O, fontSize: 13, fontWeight: 700, cursor: 'pointer', boxShadow: '0 0 20px rgba(0,212,184,.3)' }}>
+
+            {/* Shield badge */}
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              fontFamily: T, fontSize: 9, color: '#4ade80',
+              background: 'rgba(74,222,128,.08)', border: '1px solid rgba(74,222,128,.2)',
+              borderRadius: 8, padding: '4px 12px', marginBottom: 20,
+              letterSpacing: 1, textTransform: 'uppercase',
+            }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', animation: 'pulse 2s infinite' }} />
+              Sovereign Prompt Shield v2.0 · HIPAA Aligned
+            </div>
+
+            <button
+              onClick={() => setShowModal(false)}
+              style={{
+                background: 'linear-gradient(135deg,#0d2e1e,#156040)',
+                color: '#faf0dc',
+                border: 'none',
+                borderRadius: 10,
+                padding: '13px 32px',
+                fontFamily: O,
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: 'pointer',
+                boxShadow: '0 0 20px rgba(0,212,184,.3)',
+                width: '100%',
+              }}
+            >
               Enter CareCircle ⬡
             </button>
           </div>
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', maxWidth: 480, margin: '0 auto', background: '#07101f', fontFamily: O, color: '#eef2f8', position: 'relative' }}>
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        maxWidth: 480,
+        margin: '0 auto',
+        background: '#07101f',
+        fontFamily: O,
+        color: '#eef2f8',
+        position: 'relative',
+      }}>
 
-        <div style={{ flexShrink: 0, padding: '14px 18px 12px', background: 'rgba(7,16,31,.97)', borderBottom: '1px solid rgba(0,212,184,.14)', backdropFilter: 'blur(20px)', zIndex: 10 }}>
+        {/* HEADER */}
+        <div style={{
+          flexShrink: 0,
+          padding: '14px 18px 12px',
+          background: 'rgba(7,16,31,.97)',
+          borderBottom: '1px solid rgba(0,212,184,.14)',
+          backdropFilter: 'blur(20px)',
+          zIndex: 10,
+          position: 'relative',
+        }}>
+          {/* Glowing top edge */}
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: 'linear-gradient(90deg,transparent,#00d4b8,#8060cc,#00d4b8,transparent)' }} />
+
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none' }}>
-              <div style={{ width: 38, height: 38, borderRadius: 11, background: 'linear-gradient(135deg,#00b89e,#8060cc)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, boxShadow: '0 4px 18px rgba(0,212,184,.25)' }}>🤝</div>
+              <div style={{
+                width: 38, height: 38, borderRadius: 11,
+                background: 'linear-gradient(135deg,#00b89e,#8060cc)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 18, boxShadow: '0 4px 18px rgba(0,212,184,.25)',
+              }}>🤝</div>
               <div>
                 <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: '#eef2f8' }}>CareCircle</div>
-                <div style={{ fontFamily: T, fontSize: 8, color: '#00d4b8', letterSpacing: '.18em', textTransform: 'uppercase', marginTop: 1 }}>FQHC Elder Care Coordination</div>
+                <div style={{ fontFamily: T, fontSize: 8, color: '#00d4b8', letterSpacing: '.18em', textTransform: 'uppercase', marginTop: 1 }}>
+                  FQHC Elder Care Coordination
+                </div>
               </div>
             </Link>
             <div style={{ textAlign: 'right' }}>
               <div style={{ fontSize: 12, fontWeight: 600 }}>{PATIENT.name}</div>
               <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf', marginTop: 1 }}>{PATIENT.id}</div>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: T, fontSize: 8, color: '#4ade80', marginTop: 3 }}>
-                <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', animation: 'pulse 2s infinite' }} />SHIELD ON
+                <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', animation: 'pulse 2s infinite' }} />
+                SHIELD ON
               </div>
             </div>
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 5, padding: '8px 18px', background: 'rgba(7,16,31,.95)', borderBottom: '1px solid rgba(0,212,184,.14)', flexShrink: 0 }}>
-          <button onClick={() => { setView('family'); setPage('home'); }} style={{ flex: 1, padding: '7px 0', borderRadius: 20, border: `1px solid ${view === 'family' ? 'transparent' : 'rgba(0,212,184,.14)'}`, background: view === 'family' ? 'linear-gradient(135deg,#00d4b8,#00b89e)' : 'rgba(255,255,255,.04)', color: view === 'family' ? '#07101f' : '#7a9bbf', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: O }}>👪 Family View</button>
-          <button onClick={() => { setView('clinical'); setPage('careiq'); }} style={{ flex: 1, padding: '7px 0', borderRadius: 20, border: `1px solid ${view === 'clinical' ? 'transparent' : 'rgba(0,212,184,.14)'}`, background: view === 'clinical' ? 'linear-gradient(135deg,#8060cc,#6040aa)' : 'rgba(255,255,255,.04)', color: view === 'clinical' ? '#eef2f8' : '#7a9bbf', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: O }}>⚕️ Clinical View</button>
+        {/* VIEW TOGGLE */}
+        <div style={{
+          display: 'flex', gap: 5, padding: '8px 18px',
+          background: 'rgba(7,16,31,.95)',
+          borderBottom: '1px solid rgba(0,212,184,.14)',
+          flexShrink: 0,
+        }}>
+          <button
+            onClick={() => { setView('family'); setPage('home'); }}
+            style={{
+              flex: 1, padding: '7px 0', borderRadius: 20,
+              border: `1px solid ${view === 'family' ? 'transparent' : 'rgba(0,212,184,.14)'}`,
+              background: view === 'family' ? 'linear-gradient(135deg,#00d4b8,#00b89e)' : 'rgba(255,255,255,.04)',
+              color: view === 'family' ? '#07101f' : '#7a9bbf',
+              fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: O,
+              boxShadow: view === 'family' ? '0 0 14px rgba(0,212,184,.25)' : 'none',
+            }}
+          >
+            👪 Family View
+          </button>
+          <button
+            onClick={() => { setView('clinical'); setPage('careiq'); }}
+            style={{
+              flex: 1, padding: '7px 0', borderRadius: 20,
+              border: `1px solid ${view === 'clinical' ? 'transparent' : 'rgba(0,212,184,.14)'}`,
+              background: view === 'clinical' ? 'linear-gradient(135deg,#8060cc,#6040aa)' : 'rgba(255,255,255,.04)',
+              color: view === 'clinical' ? '#eef2f8' : '#7a9bbf',
+              fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: O,
+              boxShadow: view === 'clinical' ? '0 0 14px rgba(128,96,204,.25)' : 'none',
+            }}
+          >
+            ⚕️ Clinical View
+          </button>
         </div>
 
+        {/* CONTENT */}
         <div style={{ flex: 1, overflowY: 'auto', scrollbarWidth: 'none', minHeight: 0 }}>
           {renderPage()}
         </div>
 
-        <div style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 480, zIndex: 20, background: 'rgba(7,16,31,.97)', backdropFilter: 'blur(20px)', borderTop: '1px solid rgba(0,212,184,.14)', display: 'flex', padding: '7px 0 14px', overflowX: 'auto', scrollbarWidth: 'none' }}>
+        {/* BOTTOM NAV */}
+        <div style={{
+          position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+          width: '100%', maxWidth: 480, zIndex: 20,
+          background: 'rgba(7,16,31,.97)',
+          backdropFilter: 'blur(20px)',
+          borderTop: '1px solid rgba(0,212,184,.14)',
+          display: 'flex', padding: '7px 0 14px',
+          overflowX: 'auto', scrollbarWidth: 'none',
+        }}>
           {nav.map(n => (
-            <button key={n.id} onClick={() => setPage(n.id)} style={{ flex: '1 0 auto', minWidth: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, padding: '6px 4px', cursor: 'pointer', border: 'none', background: 'none', color: activePage === n.id ? '#00d4b8' : '#7a9bbf', fontFamily: O, transition: 'color .2s' }}>
+            <button
+              key={n.id}
+              onClick={() => setPage(n.id)}
+              style={{
+                flex: '1 0 auto', minWidth: 56,
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+                padding: '6px 4px', cursor: 'pointer', border: 'none', background: 'none',
+                color: activePage === n.id ? '#00d4b8' : '#7a9bbf',
+                fontFamily: O, transition: 'color .2s',
+              }}
+            >
               <span style={{ fontSize: 18 }}>{n.ico}</span>
               <span style={{ fontSize: 8, fontWeight: 600, letterSpacing: '.05em', textTransform: 'uppercase' }}>{n.lbl}</span>
             </button>
