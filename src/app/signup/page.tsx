@@ -335,6 +335,17 @@ function SignupInner() {
             </p>
           </div>
         )}
+
+        {/* Login link for returning family members */}
+        <p style={{ marginTop: 18, fontSize: 11, color: '#7a9bbf', textAlign: 'center', lineHeight: 1.6 }}>
+          Already have an account?{' '}
+          <Link
+            href="/login"
+            style={{ color: '#00d4b8', textDecoration: 'underline', textUnderlineOffset: 3 }}
+          >
+            Log in
+          </Link>
+        </p>
       </div>
     </div>
   );
