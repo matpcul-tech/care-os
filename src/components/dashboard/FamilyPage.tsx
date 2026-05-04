@@ -119,13 +119,13 @@ export default function FamilyPage() {
     (async () => {
       const s = loadSession();
       if (!s) {
-        router.push('/signup');
+        router.push('/login');
         return;
       }
       const valid = await ensureValidSession(s);
       if (!valid) {
         window.localStorage.removeItem('cc-session');
-        router.push('/signup');
+        router.push('/login');
         return;
       }
       if (cancelled) return;
@@ -172,7 +172,7 @@ export default function FamilyPage() {
 
   const signOut = () => {
     window.localStorage.removeItem('cc-session');
-    router.push('/signup');
+    router.push('/login');
   };
 
   if (loading) {
