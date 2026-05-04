@@ -5,7 +5,12 @@ export const runtime = 'edge';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const RESEND_API_KEY = process.env.RESEND_API_KEY!;
-const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'CareCircle <care@carecircle.health>';
+const FROM_EMAIL =
+  process.env.RESEND_FROM_EMAIL || 'CareCircle <care@carecircle.health>';
+
+const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_FROM = process.env.TWILIO_FROM_NUMBER;
 
 type Severity = 'critical' | 'informational';
 
@@ -32,6 +37,7 @@ interface CircleMember {
   id: string;
   member_email: string;
   member_name: string;
+  member_phone: string | null;
   alert_level: Severity;
 }
 
@@ -42,6 +48,21 @@ interface DeliveryResult {
   id?: string | null;
   reason?: string;
   severity_sent: Severity;
+}
+
+interface SmsResult {
+  member_id: string;
+  phone: string;
+  sent: boolean;
+  sid?: string | null;
+  reason?: string;
+}
+
+interface PersistedAlert {
+  id: string;
+  metric: string;
+  severity: Severity;
+  fired_at: string;
 }
 
 function bad(message: string, status = 400) {
@@ -83,14 +104,21 @@ function evaluate(v: Vitals): Flag[] {
   return flags;
 }
 
-async function sb(method: 'GET' | 'POST', path: string) {
+async function sb(
+  method: 'GET' | 'POST',
+  path: string,
+  body?: unknown,
+  prefer?: string,
+) {
   return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
       apikey: SERVICE_ROLE,
       Authorization: `Bearer ${SERVICE_ROLE}`,
+      ...(prefer ? { Prefer: prefer } : {}),
     },
+    body: body ? JSON.stringify(body) : undefined,
     cache: 'no-store',
   });
 }
@@ -153,6 +181,130 @@ async function sendAlertEmail(args: {
   return { sent: true as const, id: data.id ?? null };
 }
 
+// Emergency SMS fan-out via Twilio. Only fires for CRITICAL severity events
+// and only to members with a phone on file. SMS body contains metric +
+// recommendation + patient ref — no PHI, no raw values.
+async function sendSms(args: {
+  to: string;
+  body: string;
+}): Promise<{ sent: boolean; sid?: string | null; reason?: string }> {
+  if (!TWILIO_SID || !TWILIO_TOKEN || !TWILIO_FROM) {
+    return { sent: false, reason: 'TWILIO_* env not configured' };
+  }
+  const auth = btoa(`${TWILIO_SID}:${TWILIO_TOKEN}`);
+  const params = new URLSearchParams({
+    From: TWILIO_FROM,
+    To: args.to,
+    Body: args.body,
+  });
+  const r = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: params.toString(),
+    },
+  );
+  if (!r.ok) {
+    return { sent: false, reason: `Twilio ${r.status}: ${await r.text()}` };
+  }
+  const data = (await r.json()) as { sid?: string };
+  return { sent: true, sid: data.sid ?? null };
+}
+
+function buildSmsBody(patientRef: string, criticalFlags: Flag[]): string {
+  const lines: string[] = [
+    `[CRITICAL] CareCircle alert (Patient ${patientRef}…)`,
+  ];
+  for (const f of criticalFlags) {
+    lines.push(`• ${f.metric}: ${f.recommendation}`);
+  }
+  lines.push('Sign in to CareCircle for details. No PHI in this message.');
+  // Twilio hard cap is 1600 chars; trim defensively.
+  const body = lines.join('\n');
+  return body.length > 1500 ? `${body.slice(0, 1497)}...` : body;
+}
+
+async function persistAlerts(args: {
+  patientId: string;
+  flags: Flag[];
+  members: CircleMember[];
+  delivery: DeliveryResult[];
+  smsDelivery: SmsResult[];
+  firedAt: string;
+}): Promise<{ alerts: PersistedAlert[]; persistError: string | null }> {
+  const deliveryByMember = new Map<string, DeliveryResult>();
+  for (const d of args.delivery) deliveryByMember.set(d.member_id, d);
+  const smsByMember = new Map<string, SmsResult>();
+  for (const s of args.smsDelivery) smsByMember.set(s.member_id, s);
+
+  // For each flag, the visible recipients are:
+  //   - all 'informational' members (they see everything)
+  //   - all members if the flag is critical (critical members also see it)
+  const visibleFor = (flag: Flag) =>
+    args.members.filter(
+      (m) => m.alert_level === 'informational' || flag.severity === 'critical',
+    );
+
+  const rows = args.flags.map((flag) => {
+    const visible = visibleFor(flag);
+    const sent: Array<{ member_id: string; email: string }> = [];
+    const failed: Array<{ member_id: string; email: string; reason: string }> = [];
+    const sms_sent: Array<{ member_id: string; phone: string }> = [];
+    const sms_failed: Array<{ member_id: string; phone: string; reason: string }> = [];
+
+    for (const m of visible) {
+      const d = deliveryByMember.get(m.id);
+      if (d?.sent) sent.push({ member_id: m.id, email: m.member_email });
+      else if (d) failed.push({ member_id: m.id, email: m.member_email, reason: d.reason || 'failed' });
+
+      if (flag.severity === 'critical') {
+        const s = smsByMember.get(m.id);
+        if (s?.sent) sms_sent.push({ member_id: m.id, phone: s.phone });
+        else if (s) sms_failed.push({ member_id: m.id, phone: s.phone, reason: s.reason || 'failed' });
+      }
+    }
+
+    return {
+      patient_id: args.patientId,
+      metric: flag.metric,
+      severity: flag.severity,
+      recommendation: flag.recommendation,
+      fired_at: args.firedAt,
+      delivery_count: sent.length,
+      delivery_summary: { sent, failed, sms_sent, sms_failed },
+    };
+  });
+
+  if (rows.length === 0) return { alerts: [], persistError: null };
+
+  const r = await sb('POST', 'care_circle_alerts', rows, 'return=representation');
+  if (!r.ok) {
+    return {
+      alerts: [],
+      persistError: `care_circle_alerts insert ${r.status}: ${await r.text()}`,
+    };
+  }
+  const inserted = (await r.json()) as Array<{
+    id: string;
+    metric: string;
+    severity: Severity;
+    fired_at: string;
+  }>;
+  return {
+    alerts: inserted.map((a) => ({
+      id: a.id,
+      metric: a.metric,
+      severity: a.severity,
+      fired_at: a.fired_at,
+    })),
+    persistError: null,
+  };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as AlertsBody;
@@ -166,24 +318,27 @@ export async function POST(req: NextRequest) {
         flagged: false,
         flags: [],
         delivery: [],
+        sms_delivery: [],
+        alerts: [],
         sent_at: new Date().toISOString(),
       });
     }
 
     const r = await sb(
       'GET',
-      `care_circle?patient_id=eq.${encodeURIComponent(patientId)}&select=id,member_email,member_name,alert_level`,
+      `care_circle?patient_id=eq.${encodeURIComponent(patientId)}&select=id,member_email,member_name,member_phone,alert_level`,
     );
     if (!r.ok) return bad(`Supabase ${r.status}: ${await r.text()}`, 500);
     const allMembers = (await r.json()) as CircleMember[];
 
     const sentAt = new Date().toISOString();
     const criticalFlags = flags.filter((f) => f.severity === 'critical');
+    const patientRef = patientId.slice(0, 8);
 
+    // 1. Email fan-out (severity-aware visibility).
     const delivery: DeliveryResult[] = (
       await Promise.all(
         allMembers.map(async (m) => {
-          // Critical-only members never see informational flags.
           const visible = m.alert_level === 'critical' ? criticalFlags : flags;
           if (visible.length === 0) return null;
 
@@ -204,11 +359,46 @@ export async function POST(req: NextRequest) {
       )
     ).filter((d): d is DeliveryResult => d !== null);
 
+    // 2. Emergency SMS fan-out (critical only, to all members with a phone).
+    let smsDelivery: SmsResult[] = [];
+    if (criticalFlags.length > 0) {
+      const smsBody = buildSmsBody(patientRef, criticalFlags);
+      const phoneMembers = allMembers.filter(
+        (m): m is CircleMember & { member_phone: string } =>
+          typeof m.member_phone === 'string' && m.member_phone.length > 0,
+      );
+      smsDelivery = await Promise.all(
+        phoneMembers.map(async (m) => {
+          const result = await sendSms({ to: m.member_phone, body: smsBody });
+          return {
+            member_id: m.id,
+            phone: m.member_phone,
+            sent: result.sent,
+            sid: result.sid ?? null,
+            ...(result.reason ? { reason: result.reason } : {}),
+          };
+        }),
+      );
+    }
+
+    // 3. Persist to care_circle_alerts (best-effort).
+    const { alerts, persistError } = await persistAlerts({
+      patientId,
+      flags,
+      members: allMembers,
+      delivery,
+      smsDelivery,
+      firedAt: sentAt,
+    });
+
     return NextResponse.json({
       flagged: true,
       flags,
       delivery,
+      sms_delivery: smsDelivery,
+      alerts,
       sent_at: sentAt,
+      ...(persistError ? { persist_warning: persistError } : {}),
     });
   } catch {
     return bad('Internal error', 500);
