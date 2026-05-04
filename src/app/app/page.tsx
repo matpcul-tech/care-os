@@ -24,7 +24,7 @@ export default function AppPage() {
         @keyframes pulse-dot{0%,100%{opacity:.6;transform:scale(1)}50%{opacity:1;transform:scale(1.2)}}
       `}</style>
 
-      {/* HEADER — minimal, no nav tabs */}
+      {/* HEADER, minimal, no nav tabs */}
       <header
         style={{
           position: 'sticky',
@@ -52,6 +52,7 @@ export default function AppPage() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            gap: 10,
           }}
         >
           <Link
@@ -61,6 +62,7 @@ export default function AppPage() {
               alignItems: 'center',
               gap: 10,
               textDecoration: 'none',
+              minWidth: 0,
             }}
           >
             <div
@@ -73,11 +75,12 @@ export default function AppPage() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 boxShadow: '0 0 14px rgba(0,212,184,.3)',
+                flexShrink: 0,
               }}
             >
               <Heart size={14} color="#fff" fill="#fff" />
             </div>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div
                 style={{ fontFamily: P, fontSize: 15, color: '#eef2f8', lineHeight: 1.1 }}
               >
@@ -97,33 +100,65 @@ export default function AppPage() {
               </div>
             </div>
           </Link>
+
           <div
             style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 5,
-              fontFamily: T,
-              fontSize: 8,
-              color: '#4ade80',
-              letterSpacing: '.1em',
-              textTransform: 'uppercase',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-end',
+              gap: 6,
+              flexShrink: 0,
             }}
           >
+            <Link
+              href="/dashboard"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '5px 11px',
+                borderRadius: 9,
+                border: '1px solid rgba(0,212,184,.3)',
+                background: 'rgba(0,212,184,.1)',
+                color: '#00d4b8',
+                fontFamily: O,
+                fontSize: 11,
+                fontWeight: 600,
+                textDecoration: 'none',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Full Dashboard
+              <span aria-hidden style={{ fontSize: 12, lineHeight: 1 }}>›</span>
+            </Link>
             <div
               style={{
-                width: 6,
-                height: 6,
-                borderRadius: '50%',
-                background: '#4ade80',
-                animation: 'pulse-dot 2s infinite',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontFamily: T,
+                fontSize: 8,
+                color: '#4ade80',
+                letterSpacing: '.1em',
+                textTransform: 'uppercase',
               }}
-            />
-            Shield On
+            >
+              <div
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: '#4ade80',
+                  animation: 'pulse-dot 2s infinite',
+                }}
+              />
+              Shield On
+            </div>
           </div>
         </div>
       </header>
 
-      {/* DASHBOARD — alerts only, nothing else */}
+      {/* DASHBOARD, alerts only */}
       <main style={{ maxWidth: 480, margin: '0 auto' }}>
         <FamilyPage />
       </main>
