@@ -44,6 +44,13 @@ interface DeliveryResult {
   severity_sent: Severity;
 }
 
+interface PersistedAlert {
+  id: string;
+  metric: string;
+  severity: Severity;
+  fired_at: string;
+}
+
 function bad(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
@@ -83,14 +90,16 @@ function evaluate(v: Vitals): Flag[] {
   return flags;
 }
 
-async function sb(method: 'GET' | 'POST', path: string) {
+async function sb(method: 'GET' | 'POST', path: string, body?: unknown, prefer?: string) {
   return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
       apikey: SERVICE_ROLE,
       Authorization: `Bearer ${SERVICE_ROLE}`,
+      ...(prefer ? { Prefer: prefer } : {}),
     },
+    body: body ? JSON.stringify(body) : undefined,
     cache: 'no-store',
   });
 }
@@ -153,6 +162,71 @@ async function sendAlertEmail(args: {
   return { sent: true as const, id: data.id ?? null };
 }
 
+// Persist one row per fired flag to public.care_circle_alerts so the family
+// dashboard can read alert history via RLS. Best-effort: failures are returned
+// but don't fail the request — emails already went out.
+async function persistAlerts(args: {
+  patientId: string;
+  flags: Flag[];
+  members: CircleMember[];
+  delivery: DeliveryResult[];
+  firedAt: string;
+}): Promise<{ alerts: PersistedAlert[]; persistError: string | null }> {
+  const deliveryByMember = new Map<string, DeliveryResult>();
+  for (const d of args.delivery) deliveryByMember.set(d.member_id, d);
+
+  // For each flag, the visible recipients are:
+  //   - all 'informational' members (they see everything)
+  //   - all members if the flag is critical (critical members also see it)
+  const visibleFor = (flag: Flag) =>
+    args.members.filter(
+      (m) => m.alert_level === 'informational' || flag.severity === 'critical',
+    );
+
+  const rows = args.flags.map((flag) => {
+    const visible = visibleFor(flag);
+    const sent: Array<{ member_id: string; email: string }> = [];
+    const failed: Array<{ member_id: string; email: string; reason: string }> = [];
+    for (const m of visible) {
+      const d = deliveryByMember.get(m.id);
+      if (!d) continue;
+      if (d.sent) sent.push({ member_id: m.id, email: m.member_email });
+      else failed.push({ member_id: m.id, email: m.member_email, reason: d.reason || 'failed' });
+    }
+    return {
+      patient_id: args.patientId,
+      metric: flag.metric,
+      severity: flag.severity,
+      recommendation: flag.recommendation,
+      fired_at: args.firedAt,
+      delivery_count: sent.length,
+      delivery_summary: { sent, failed },
+    };
+  });
+
+  if (rows.length === 0) return { alerts: [], persistError: null };
+
+  const r = await sb('POST', 'care_circle_alerts', rows, 'return=representation');
+  if (!r.ok) {
+    return { alerts: [], persistError: `care_circle_alerts insert ${r.status}: ${await r.text()}` };
+  }
+  const inserted = (await r.json()) as Array<{
+    id: string;
+    metric: string;
+    severity: Severity;
+    fired_at: string;
+  }>;
+  return {
+    alerts: inserted.map((a) => ({
+      id: a.id,
+      metric: a.metric,
+      severity: a.severity,
+      fired_at: a.fired_at,
+    })),
+    persistError: null,
+  };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as AlertsBody;
@@ -166,6 +240,7 @@ export async function POST(req: NextRequest) {
         flagged: false,
         flags: [],
         delivery: [],
+        alerts: [],
         sent_at: new Date().toISOString(),
       });
     }
@@ -183,7 +258,6 @@ export async function POST(req: NextRequest) {
     const delivery: DeliveryResult[] = (
       await Promise.all(
         allMembers.map(async (m) => {
-          // Critical-only members never see informational flags.
           const visible = m.alert_level === 'critical' ? criticalFlags : flags;
           if (visible.length === 0) return null;
 
@@ -204,11 +278,21 @@ export async function POST(req: NextRequest) {
       )
     ).filter((d): d is DeliveryResult => d !== null);
 
+    const { alerts, persistError } = await persistAlerts({
+      patientId,
+      flags,
+      members: allMembers,
+      delivery,
+      firedAt: sentAt,
+    });
+
     return NextResponse.json({
       flagged: true,
       flags,
       delivery,
+      alerts,
       sent_at: sentAt,
+      ...(persistError ? { persist_warning: persistError } : {}),
     });
   } catch {
     return bad('Internal error', 500);
