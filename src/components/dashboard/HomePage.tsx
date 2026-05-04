@@ -50,7 +50,8 @@ export default function HomePage({
     };
   }, [session.access_token, session.patient_id, session.user_id]);
 
-  const patientLabel = session.patient_name || 'Your loved one';
+  const patientName = session.patient_name;
+  const patientRef = session.patient_id.slice(0, 8);
   const criticalCount = (alerts || []).filter((a) => a.severity === 'critical').length;
   const lastAlert = (alerts || [])[0];
 
@@ -66,18 +67,31 @@ export default function HomePage({
           marginBottom: 12,
         }}
       >
-        <div
-          style={{
-            fontFamily: "'Playfair Display',serif",
-            fontSize: 22,
-            color: '#eef2f8',
-            marginBottom: 4,
-          }}
-        >
-          {patientLabel}
-        </div>
+        {patientName ? (
+          <div
+            style={{
+              fontFamily: "'Playfair Display',serif",
+              fontSize: 22,
+              color: '#eef2f8',
+              marginBottom: 4,
+            }}
+          >
+            {patientName}
+          </div>
+        ) : (
+          <div
+            style={{
+              fontFamily: "'Playfair Display',serif",
+              fontSize: 22,
+              color: '#eef2f8',
+              marginBottom: 4,
+            }}
+          >
+            Patient {patientRef}
+          </div>
+        )}
         <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf' }}>
-          Patient ref: {session.patient_id.slice(0, 8)}...
+          Patient ref: {patientRef}...
         </div>
         {me && (
           <div
@@ -210,15 +224,6 @@ export default function HomePage({
       >
         See full alert history
       </button>
-
-      <div style={SECTION_LABEL}>What you cannot see here yet</div>
-      <div style={{ background: CARD_BG, border: CARD_BORDER, borderRadius: 12, padding: 14 }}>
-        <div style={{ fontSize: 11, color: '#7a9bbf', lineHeight: 1.6 }}>
-          Vitals, medications, lab files, and the patient profile all live encrypted inside the
-          patient&apos;s CareIQ vault. Family-readable surfaces for those will appear in upcoming
-          tabs once a non-PHI mirror or decrypted endpoint ships from the CareIQ side.
-        </div>
-      </div>
     </div>
   );
 }
