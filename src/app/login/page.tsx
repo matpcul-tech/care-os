@@ -15,7 +15,7 @@ const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 interface CCSession {
   access_token: string;
   refresh_token: string;
-  expires_at: number; // unix seconds
+  expires_at: number;
   user_id: string;
   patient_id: string;
   patient_name: string | null;
@@ -23,6 +23,7 @@ interface CCSession {
 
 interface CareCircleRow {
   patient_id: string;
+  patient_name: string | null;
 }
 
 interface SupabaseTokenResponse {
@@ -80,7 +81,6 @@ function readSession(): CCSession | null {
 }
 
 function sessionStillValid(s: CCSession): boolean {
-  // Treat the token as valid only if it has at least 60s of life left.
   return s.expires_at - 60 > Math.floor(Date.now() / 1000);
 }
 
@@ -106,11 +106,14 @@ async function refreshSession(s: CCSession): Promise<CCSession | null> {
 }
 
 // After password login, query the family member's care_circle row to find
-// which patient they're linked to, since the auth response only carries
-// the user id.
-async function lookupPatientId(accessToken: string, userId: string): Promise<string | null> {
+// which patient they're linked to and their name. Reads through RLS scoped
+// to member_user_id = auth.uid(), so the JWT must be passed.
+async function lookupCircle(
+  accessToken: string,
+  userId: string,
+): Promise<CareCircleRow | null> {
   const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/care_circle?member_user_id=eq.${userId}&select=patient_id&limit=1`,
+    `${SUPABASE_URL}/rest/v1/care_circle?member_user_id=eq.${userId}&select=patient_id,patient_name&limit=1`,
     {
       headers: {
         apikey: ANON_KEY,
@@ -121,7 +124,7 @@ async function lookupPatientId(accessToken: string, userId: string): Promise<str
   );
   if (!r.ok) return null;
   const rows = (await r.json()) as CareCircleRow[];
-  return rows[0]?.patient_id ?? null;
+  return rows[0] ?? null;
 }
 
 export default function LoginPage() {
@@ -132,7 +135,6 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // On mount: skip the form if a usable session already exists.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -150,7 +152,6 @@ export default function LoginPage() {
       if (refreshed) {
         router.replace('/app');
       } else {
-        // Refresh failed: clear the dead session so the user re-auths cleanly.
         window.localStorage.removeItem('cc-session');
         setChecking(false);
       }
@@ -199,8 +200,8 @@ export default function LoginPage() {
 
       const data = (await tokenRes.json()) as SupabaseTokenResponse;
 
-      const patient_id = await lookupPatientId(data.access_token, data.user.id);
-      if (!patient_id) {
+      const cc = await lookupCircle(data.access_token, data.user.id);
+      if (!cc) {
         setError(
           'Logged in, but no Care Circle membership found for this account. Use your invite link to join a Care Circle.',
         );
@@ -212,8 +213,8 @@ export default function LoginPage() {
         refresh_token: data.refresh_token,
         expires_at: data.expires_at,
         user_id: data.user.id,
-        patient_id,
-        patient_name: null,
+        patient_id: cc.patient_id,
+        patient_name: cc.patient_name,
       };
       window.localStorage.setItem('cc-session', JSON.stringify(session));
       router.replace('/app');
@@ -241,7 +242,7 @@ export default function LoginPage() {
           @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@300;400;500;600;700&display=swap');
           *{box-sizing:border-box}
         `}</style>
-        Checking session…
+        Checking session...
       </div>
     );
   }
@@ -326,7 +327,7 @@ export default function LoginPage() {
             style={input}
             type="password"
             autoComplete="current-password"
-            placeholder="••••••••"
+            placeholder=""
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
@@ -366,7 +367,7 @@ export default function LoginPage() {
               boxShadow: '0 0 20px rgba(0,212,184,.3)',
             }}
           >
-            {submitting ? 'Signing in…' : 'Sign in'}
+            {submitting ? 'Signing in...' : 'Sign in'}
           </button>
 
           <p style={{ marginTop: 18, fontSize: 11, color: '#7a9bbf', textAlign: 'center', lineHeight: 1.6 }}>

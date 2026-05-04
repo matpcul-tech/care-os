@@ -47,7 +47,6 @@ function isEmail(s: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
 
-// Returns the first env-var problem, or null if all required vars are set.
 function envProblem(): string | null {
   if (!SUPABASE_URL) return 'NEXT_PUBLIC_SUPABASE_URL not set';
   if (!ANON_KEY) return 'NEXT_PUBLIC_SUPABASE_ANON_KEY not set';
@@ -96,9 +95,6 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
 
-// GET — validate a code without redeeming. Used by the signup page to show
-// "You're being added to <patient_name>'s Care Circle" before the family
-// member fills in their password.
 export async function GET(req: NextRequest) {
   try {
     const envErr = envProblem();
@@ -141,8 +137,6 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST — redeem: create family-member auth account, link to patient via
-// care_circle row, mark invite used, return a session.
 export async function POST(req: NextRequest) {
   try {
     const envErr = envProblem();
@@ -185,7 +179,6 @@ export async function POST(req: NextRequest) {
       return bad('alert_level must be "critical" or "informational"');
     }
 
-    // 1. Create the auth account (email pre-confirmed so they can sign in now).
     const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
       method: 'POST',
       headers: {
@@ -219,7 +212,8 @@ export async function POST(req: NextRequest) {
     }
     const newUser = (await createRes.json()) as { id: string; email: string };
 
-    // 2. Insert the care_circle row linking new auth account to the patient.
+    // Insert care_circle row. patient_name is denormalized from the invite
+    // so /login can restore it without re-querying care_circle_invites.
     const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/care_circle`, {
       method: 'POST',
       headers: {
@@ -231,6 +225,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify([
         {
           patient_id: invite.patient_id,
+          patient_name: invite.patient_name,
           member_user_id: newUser.id,
           member_email: email,
           member_name,
@@ -244,7 +239,6 @@ export async function POST(req: NextRequest) {
 
     if (!insertRes.ok) {
       const txt = await insertRes.text();
-      // Roll back the auth account so the user can retry with a fresh row.
       await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${newUser.id}`, {
         method: 'DELETE',
         headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
@@ -257,7 +251,6 @@ export async function POST(req: NextRequest) {
     }
     const circleRow = ((await insertRes.json()) as Array<Record<string, unknown>>)[0];
 
-    // 3. Mark the invite as redeemed (best-effort; non-fatal).
     await fetch(
       `${SUPABASE_URL}/rest/v1/care_circle_invites?id=eq.${invite.id}`,
       {
@@ -274,7 +267,6 @@ export async function POST(req: NextRequest) {
       },
     );
 
-    // 4. Issue the family member a session so the client is signed in.
     const tokenRes = await fetch(
       `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
       {
