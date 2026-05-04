@@ -1,371 +1,419 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
-import { PATIENT, FEED_ITEMS } from '@/lib/data';
+
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { T, O, PAGE_PAD, SECTION_LABEL, CARD_BG, CARD_BORDER } from './ui';
 
-// Demo patient UUID — swap for the authenticated user's id when auth is wired.
-const DEMO_PATIENT_UUID =
-  process.env.NEXT_PUBLIC_DEMO_PATIENT_UUID ||
-  '11111111-2222-3333-4444-555555555555';
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-type AlertLevel = 'critical' | 'informational';
+type Severity = 'critical' | 'informational';
 
-interface CircleMember {
+interface Session {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number; // unix seconds
+  user_id: string;
+  patient_id: string;
+  patient_name: string | null;
+}
+
+interface CareCircleRow {
   id: string;
   patient_id: string;
+  member_user_id: string;
   member_email: string;
   member_name: string;
+  member_phone: string | null;
   relationship: string;
-  alert_level: AlertLevel;
+  alert_level: Severity;
   created_at: string;
 }
 
-interface DeliveryResult {
-  member_id: string;
-  email: string;
-  sent: boolean;
-  id?: string | null;
-  reason?: string;
-  severity_sent: AlertLevel;
-}
-
-interface LastAlert {
-  at: string;
-  flagged: boolean;
-  flagCount: number;
-  sentCount: number;
-}
-
-const RELATIONSHIPS = [
-  'Spouse', 'Daughter', 'Son', 'Parent', 'Sibling',
-  'Caregiver', 'Home Health Aide', 'Primary Provider', 'Other',
-];
-
-const COLORS = ['#81B29A', '#F2CC8F', '#5B8FA8', '#8B7EC8', '#E07A5F', '#00d4b8'];
-
-function avatarFor(name: string) {
-  const parts = name.trim().split(/\s+/);
-  return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || '?';
-}
-
-function colorFor(id: string) {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  return COLORS[hash % COLORS.length];
+interface AlertRow {
+  id: string;
+  patient_id: string;
+  metric: string;
+  severity: Severity;
+  recommendation: string;
+  fired_at: string;
+  delivery_count: number;
 }
 
 function fmtTime(iso: string) {
   try {
     const d = new Date(iso);
     return d.toLocaleString(undefined, {
-      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
     });
   } catch {
     return iso;
   }
 }
 
+function loadSession(): Session | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem('cc-session');
+    if (!raw) return null;
+    return JSON.parse(raw) as Session;
+  } catch {
+    return null;
+  }
+}
+
+async function refreshSession(s: Session): Promise<Session | null> {
+  const r = await fetch(
+    `${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`,
+    {
+      method: 'POST',
+      headers: { apikey: ANON_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: s.refresh_token }),
+    },
+  );
+  if (!r.ok) return null;
+  const data = (await r.json()) as {
+    access_token: string;
+    refresh_token: string;
+    expires_at: number;
+  };
+  const updated: Session = {
+    ...s,
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at: data.expires_at,
+  };
+  window.localStorage.setItem('cc-session', JSON.stringify(updated));
+  return updated;
+}
+
+async function ensureValidSession(s: Session): Promise<Session | null> {
+  // Refresh 60s before expiry to avoid edge-of-expiry races.
+  if (s.expires_at - 60 > Math.floor(Date.now() / 1000)) return s;
+  return refreshSession(s);
+}
+
+async function sbAuthed(token: string, path: string): Promise<Response> {
+  return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    headers: {
+      apikey: ANON_KEY,
+      Authorization: `Bearer ${token}`,
+    },
+    cache: 'no-store',
+  });
+}
+
 export default function FamilyPage() {
-  const [members, setMembers] = useState<CircleMember[]>([]);
-  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+  const [session, setSession] = useState<Session | null>(null);
+  const [myRow, setMyRow] = useState<CareCircleRow | null>(null);
+  const [alerts, setAlerts] = useState<AlertRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [showForm, setShowForm] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [relationship, setRelationship] = useState(RELATIONSHIPS[0]);
-  const [level, setLevel] = useState<AlertLevel>('informational');
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const s = loadSession();
+      if (!s) {
+        router.push('/signup');
+        return;
+      }
+      const valid = await ensureValidSession(s);
+      if (!valid) {
+        window.localStorage.removeItem('cc-session');
+        router.push('/signup');
+        return;
+      }
+      if (cancelled) return;
+      setSession(valid);
 
-  const [checking, setChecking] = useState(false);
-  const [lastAlert, setLastAlert] = useState<LastAlert | null>(null);
+      try {
+        // Family member's own care_circle row — RLS scopes to member_user_id = auth.uid().
+        const myRowRes = await sbAuthed(
+          valid.access_token,
+          `care_circle?member_user_id=eq.${valid.user_id}&limit=1&select=*`,
+        );
+        if (!myRowRes.ok) {
+          throw new Error(`circle row ${myRowRes.status}: ${await myRowRes.text()}`);
+        }
+        const rows = (await myRowRes.json()) as CareCircleRow[];
+        const me = rows[0];
+        if (!me) throw new Error('Could not find your Care Circle row.');
+        if (cancelled) return;
+        setMyRow(me);
 
-  const loadMembers = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/circle?patient_id=${DEMO_PATIENT_UUID}`, {
-        cache: 'no-store',
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to load circle');
-      setMembers(Array.isArray(data.members) ? data.members : []);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+        // Alerts for the linked patient — family-member RLS policy in
+        // CareIQ migration 0002 lets us read these.
+        const alertsRes = await sbAuthed(
+          valid.access_token,
+          `care_circle_alerts?patient_id=eq.${me.patient_id}&order=fired_at.desc&limit=50&select=*`,
+        );
+        if (!alertsRes.ok) {
+          throw new Error(`alerts ${alertsRes.status}: ${await alertsRes.text()}`);
+        }
+        const alertRows = (await alertsRes.json()) as AlertRow[];
+        if (cancelled) return;
+        setAlerts(alertRows);
+      } catch (e) {
+        if (cancelled) return;
+        setError((e as Error).message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
-  useEffect(() => { loadMembers(); }, [loadMembers]);
-
-  const addMember = async () => {
-    if (!name.trim() || !email.trim() || !relationship.trim()) return;
-    setAdding(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/circle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          patient_id: DEMO_PATIENT_UUID,
-          member_email: email.trim(),
-          member_name: name.trim(),
-          relationship: relationship.trim(),
-          alert_level: level,
-          patient_name: PATIENT.name,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to add member');
-      setName(''); setEmail(''); setRelationship(RELATIONSHIPS[0]); setLevel('informational');
-      setShowForm(false);
-      await loadMembers();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setAdding(false);
-    }
+  const signOut = () => {
+    window.localStorage.removeItem('cc-session');
+    router.push('/signup');
   };
 
-  const runHealthCheck = async () => {
-    setChecking(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/alerts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          patient_id: DEMO_PATIENT_UUID,
-          // Demo vitals from data.ts — A1C 7.2 will fire informational alert.
-          vitals: { a1c: 7.2, ldl: 142, bp_systolic: 138, bp_diastolic: 86 },
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Health check failed');
-      const delivery: DeliveryResult[] = Array.isArray(data.delivery) ? data.delivery : [];
-      setLastAlert({
-        at: data.sent_at,
-        flagged: !!data.flagged,
-        flagCount: Array.isArray(data.flags) ? data.flags.length : 0,
-        sentCount: delivery.filter((d) => d.sent).length,
-      });
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setChecking(false);
-    }
-  };
+  if (loading) {
+    return (
+      <div style={PAGE_PAD}>
+        <div style={{ fontSize: 12, color: '#7a9bbf', textAlign: 'center', padding: 32 }}>
+          Loading your Care Circle…
+        </div>
+      </div>
+    );
+  }
 
-  const inputStyle: React.CSSProperties = {
-    width: '100%',
-    background: 'rgba(255,255,255,.05)',
-    border: CARD_BORDER,
-    borderRadius: 10,
-    padding: '10px 12px',
-    fontSize: 12,
-    color: '#eef2f8',
-    fontFamily: O,
-    outline: 'none',
-    marginBottom: 8,
-  };
-
-  return (
-    <div style={PAGE_PAD}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <div style={SECTION_LABEL}>Care Circle</div>
-        <button
-          onClick={() => setShowForm((v) => !v)}
+  if (error || !session || !myRow) {
+    return (
+      <div style={PAGE_PAD}>
+        <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Care Circle</div>
+        <div
           style={{
-            background: showForm ? 'rgba(255,255,255,.06)' : 'linear-gradient(135deg,#00d4b8,#00b89e)',
-            border: 'none',
+            background: 'rgba(232,82,110,.1)',
+            border: '1px solid rgba(232,82,110,.3)',
+            borderRadius: 12,
+            padding: 14,
+            fontSize: 11,
+            color: '#e8526e',
+            marginBottom: 12,
+          }}
+        >
+          {error || 'Session error.'}
+        </div>
+        <button
+          onClick={signOut}
+          style={{
+            width: '100%',
+            padding: '10px 0',
             borderRadius: 10,
-            padding: '6px 12px',
-            color: showForm ? '#eef2f8' : '#07101f',
-            fontSize: 10,
-            fontWeight: 700,
+            border: '1px solid rgba(0,212,184,.14)',
             cursor: 'pointer',
+            background: 'rgba(255,255,255,.06)',
+            color: '#eef2f8',
+            fontSize: 12,
+            fontWeight: 700,
             fontFamily: O,
           }}
         >
-          {showForm ? 'Cancel' : '+ Add Member'}
+          Sign in again
         </button>
       </div>
+    );
+  }
 
-      {error && (
-        <div style={{
-          background: 'rgba(232,82,110,.1)', border: '1px solid rgba(232,82,110,.3)',
-          borderRadius: 10, padding: '10px 12px', fontSize: 11, color: '#e8526e', marginBottom: 10,
-        }}>
-          {error}
+  const patientName = session.patient_name || 'your loved one';
+  const patientRef = session.patient_id.slice(0, 8);
+  const lastAlert = alerts[0];
+
+  return (
+    <div style={PAGE_PAD}>
+      {/* Patient header */}
+      <div style={SECTION_LABEL}>You are monitoring</div>
+      <div
+        style={{
+          background: CARD_BG,
+          border: CARD_BORDER,
+          borderRadius: 14,
+          padding: 16,
+          marginBottom: 12,
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "'Playfair Display',serif",
+            fontSize: 22,
+            color: '#eef2f8',
+            marginBottom: 4,
+          }}
+        >
+          {patientName}
         </div>
-      )}
-
-      {showForm && (
-        <div style={{
-          background: CARD_BG, border: CARD_BORDER, borderRadius: 14, padding: 14, marginBottom: 12,
-        }}>
-          <input style={inputStyle} placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} />
-          <input style={inputStyle} placeholder="Email address" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-          <select style={inputStyle} value={relationship} onChange={(e) => setRelationship(e.target.value)}>
-            {RELATIONSHIPS.map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-            {(['informational', 'critical'] as AlertLevel[]).map((lvl) => (
-              <button
-                key={lvl}
-                onClick={() => setLevel(lvl)}
-                style={{
-                  flex: 1,
-                  padding: '8px 0',
-                  borderRadius: 10,
-                  border: level === lvl ? '1px solid #00d4b8' : CARD_BORDER,
-                  background: level === lvl ? 'rgba(0,212,184,.12)' : 'rgba(255,255,255,.04)',
-                  color: level === lvl ? '#00d4b8' : '#7a9bbf',
-                  fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: O,
-                  textTransform: 'uppercase', letterSpacing: '.1em',
-                }}
-              >
-                {lvl === 'critical' ? '🚨 Critical only' : '🔔 All alerts'}
-              </button>
-            ))}
+        <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf' }}>
+          Patient ref: {patientRef}…
+        </div>
+        <div
+          style={{
+            marginTop: 12,
+            paddingTop: 12,
+            borderTop: CARD_BORDER,
+            display: 'flex',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 8,
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontFamily: T,
+                fontSize: 9,
+                color: '#7a9bbf',
+                textTransform: 'uppercase',
+                letterSpacing: '.1em',
+              }}
+            >
+              You are
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginTop: 3 }}>
+              {myRow.member_name}
+            </div>
+            <div style={{ fontSize: 11, color: '#7a9bbf' }}>{myRow.relationship}</div>
           </div>
-          <button
-            onClick={addMember}
-            disabled={adding || !name.trim() || !email.trim()}
+          <div
             style={{
-              width: '100%', padding: '10px 0', borderRadius: 10, border: 'none', cursor: 'pointer',
-              background: 'linear-gradient(135deg,#00d4b8,#00b89e)',
-              color: '#07101f', fontSize: 12, fontWeight: 700, fontFamily: O,
-              opacity: adding || !name.trim() || !email.trim() ? 0.5 : 1,
+              display: 'inline-flex',
+              alignItems: 'center',
+              alignSelf: 'flex-start',
+              gap: 4,
+              fontFamily: T,
+              fontSize: 9,
+              padding: '4px 10px',
+              borderRadius: 8,
+              background:
+                myRow.alert_level === 'critical'
+                  ? 'rgba(232,82,110,.12)'
+                  : 'rgba(0,212,184,.1)',
+              color: myRow.alert_level === 'critical' ? '#e8526e' : '#00d4b8',
+              border: `1px solid ${myRow.alert_level === 'critical' ? 'rgba(232,82,110,.3)' : 'rgba(0,212,184,.2)'}`,
+              textTransform: 'uppercase',
+              letterSpacing: '.1em',
             }}
           >
-            {adding ? 'Sending invite…' : 'Add & Send Invite'}
-          </button>
-        </div>
-      )}
-
-      {loading && members.length === 0 && (
-        <div style={{ fontSize: 11, color: '#7a9bbf', padding: 20, textAlign: 'center' }}>
-          Loading circle…
-        </div>
-      )}
-
-      {!loading && members.length === 0 && !error && (
-        <div style={{
-          background: CARD_BG, border: CARD_BORDER, borderRadius: 14,
-          padding: 20, textAlign: 'center', fontSize: 12, color: '#7a9bbf', marginBottom: 12,
-        }}>
-          No circle members yet. Add a family member or caregiver to start receiving alerts.
-        </div>
-      )}
-
-      {members.map((m) => (
-        <div
-          key={m.id}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 14,
-            padding: '14px 16px', background: CARD_BG, border: CARD_BORDER,
-            borderRadius: 14, marginBottom: 10,
-          }}
-        >
-          <div style={{
-            width: 44, height: 44, borderRadius: '50%', background: colorFor(m.id),
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontFamily: T, fontSize: 13, fontWeight: 700, color: '#fff', flexShrink: 0,
-          }}>
-            {avatarFor(m.member_name)}
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>{m.member_name}</div>
-            <div style={{ fontSize: 10, color: '#7a9bbf', marginTop: 2 }}>{m.relationship}</div>
-            <div style={{
-              fontFamily: T, fontSize: 9, color: '#7a9bbf', marginTop: 3,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {m.member_email}
-            </div>
-          </div>
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            fontFamily: T, fontSize: 8, padding: '3px 8px', borderRadius: 6,
-            background: m.alert_level === 'critical' ? 'rgba(232,82,110,.12)' : 'rgba(0,212,184,.1)',
-            color: m.alert_level === 'critical' ? '#e8526e' : '#00d4b8',
-            border: `1px solid ${m.alert_level === 'critical' ? 'rgba(232,82,110,.3)' : 'rgba(0,212,184,.2)'}`,
-            textTransform: 'uppercase', letterSpacing: '.1em',
-          }}>
-            {m.alert_level === 'critical' ? '🚨 Critical' : '🔔 All'}
+            {myRow.alert_level === 'critical' ? '🚨 Critical only' : '🔔 All alerts'}
           </div>
         </div>
-      ))}
-
-      {/* HEALTH CHECK CARD */}
-      <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Alerts</div>
-      <div style={{
-        background: CARD_BG, border: CARD_BORDER, borderRadius: 14, padding: 14, marginBottom: 12,
-      }}>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Run health check</div>
-        <div style={{ fontSize: 11, color: '#7a9bbf', lineHeight: 1.55, marginBottom: 10 }}>
-          Evaluate {PATIENT.short}&apos;s latest A1C, LDL, and BP against safe thresholds. The circle is notified by email — no PHI in the message.
-        </div>
-        <button
-          onClick={runHealthCheck}
-          disabled={checking || members.length === 0}
-          style={{
-            width: '100%', padding: '10px 0', borderRadius: 10, border: 'none', cursor: 'pointer',
-            background: 'linear-gradient(135deg,#8060cc,#6040aa)',
-            color: '#eef2f8', fontSize: 12, fontWeight: 700, fontFamily: O,
-            opacity: checking || members.length === 0 ? 0.5 : 1,
-          }}
-        >
-          {checking ? 'Checking…' : '🩺 Run health check'}
-        </button>
-        {lastAlert && (
-          <div style={{
-            marginTop: 10, padding: '10px 12px', borderRadius: 10,
-            background: lastAlert.flagged ? 'rgba(212,168,67,.08)' : 'rgba(74,222,128,.08)',
-            border: `1px solid ${lastAlert.flagged ? 'rgba(212,168,67,.25)' : 'rgba(74,222,128,.25)'}`,
-            fontSize: 11, lineHeight: 1.55,
-          }}>
-            <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf', marginBottom: 3 }}>
-              Last alert: {fmtTime(lastAlert.at)}
-            </div>
-            {lastAlert.flagged ? (
-              <span style={{ color: '#d4a843' }}>
-                ⚠️ {lastAlert.flagCount} metric{lastAlert.flagCount === 1 ? '' : 's'} flagged · sent to {lastAlert.sentCount} circle member{lastAlert.sentCount === 1 ? '' : 's'}.
-              </span>
-            ) : (
-              <span style={{ color: '#4ade80' }}>✅ All vitals within safe range. No alerts sent.</span>
-            )}
-          </div>
-        )}
       </div>
 
-      {/* ACTIVITY FEED (kept from existing UI) */}
-      <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Recent Activity</div>
-      {FEED_ITEMS.map((a, i) => (
-        <div key={i} style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <div style={{
-              width: 28, height: 28, borderRadius: '50%', background: a.color,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 10, fontWeight: 700, color: '#fff', flexShrink: 0,
-            }}>
-              {a.avatar}
-            </div>
-            {i < FEED_ITEMS.length - 1 && (
-              <div style={{ width: 1, flex: 1, background: 'rgba(0,212,184,.14)', marginTop: 3 }} />
-            )}
+      {/* Last alert */}
+      <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Last alert</div>
+      {lastAlert ? (
+        <div
+          style={{
+            background:
+              lastAlert.severity === 'critical'
+                ? 'rgba(232,82,110,.08)'
+                : 'rgba(212,168,67,.08)',
+            border: `1px solid ${lastAlert.severity === 'critical' ? 'rgba(232,82,110,.3)' : 'rgba(212,168,67,.25)'}`,
+            borderRadius: 12,
+            padding: 14,
+            marginBottom: 12,
+          }}
+        >
+          <div
+            style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf', marginBottom: 4 }}
+          >
+            {fmtTime(lastAlert.fired_at)}
           </div>
-          <div style={{ flex: 1, paddingBottom: 10 }}>
-            <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf', marginBottom: 2 }}>{a.time}</div>
-            <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 2 }}>
-              {a.who} <span style={{ color: '#7a9bbf', fontWeight: 400 }}>{a.action}</span>
-            </div>
-            <div style={{ fontSize: 11, color: '#7a9bbf', lineHeight: 1.5 }}>{a.what}</div>
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 700,
+              marginBottom: 4,
+              color: lastAlert.severity === 'critical' ? '#e8526e' : '#d4a843',
+            }}
+          >
+            {lastAlert.severity === 'critical' ? '🚨 ' : '⚠️ '}
+            {lastAlert.metric} · {lastAlert.severity.toUpperCase()}
+          </div>
+          <div style={{ fontSize: 11, color: '#eef2f8', lineHeight: 1.55 }}>
+            {lastAlert.recommendation}
           </div>
         </div>
-      ))}
+      ) : (
+        <div
+          style={{
+            background: CARD_BG,
+            border: CARD_BORDER,
+            borderRadius: 12,
+            padding: 14,
+            fontSize: 11,
+            color: '#4ade80',
+            textAlign: 'center',
+            marginBottom: 12,
+          }}
+        >
+          ✅ No alerts yet — all monitored vitals are within safe range.
+        </div>
+      )}
+
+      {/* Alert history */}
+      {alerts.length > 1 && (
+        <>
+          <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Alert History</div>
+          {alerts.slice(1).map((a) => (
+            <div
+              key={a.id}
+              style={{
+                background: CARD_BG,
+                border: CARD_BORDER,
+                borderRadius: 12,
+                padding: '12px 14px',
+                marginBottom: 8,
+              }}
+            >
+              <div
+                style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf', marginBottom: 3 }}
+              >
+                {fmtTime(a.fired_at)}
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  marginBottom: 2,
+                  color: a.severity === 'critical' ? '#e8526e' : '#d4a843',
+                }}
+              >
+                {a.metric} · {a.severity.toUpperCase()}
+              </div>
+              <div style={{ fontSize: 11, color: '#7a9bbf', lineHeight: 1.55 }}>
+                {a.recommendation}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+
+      <button
+        onClick={signOut}
+        style={{
+          width: '100%',
+          marginTop: 24,
+          padding: '10px 0',
+          borderRadius: 10,
+          border: '1px solid rgba(0,212,184,.14)',
+          cursor: 'pointer',
+          background: 'rgba(255,255,255,.04)',
+          color: '#7a9bbf',
+          fontSize: 11,
+          fontWeight: 600,
+          fontFamily: O,
+        }}
+      >
+        Sign out
+      </button>
     </div>
   );
 }
