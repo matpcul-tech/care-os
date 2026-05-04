@@ -6,13 +6,15 @@ import { T, O, PAGE_PAD, SECTION_LABEL, CARD_BG, CARD_BORDER } from './ui';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const CAREIQ_URL =
+  process.env.NEXT_PUBLIC_CAREIQ_URL || 'https://iq-sable.vercel.app';
 
 type Severity = 'critical' | 'informational';
 
 interface Session {
   access_token: string;
   refresh_token: string;
-  expires_at: number; // unix seconds
+  expires_at: number;
   user_id: string;
   patient_id: string;
   patient_name: string | null;
@@ -38,6 +40,18 @@ interface AlertRow {
   recommendation: string;
   fired_at: string;
   delivery_count: number;
+}
+
+interface FamilyVitals {
+  patient_id: string;
+  bp_systolic: number | null;
+  bp_diastolic: number | null;
+  a1c: number | null;
+  ldl: number | null;
+  hr: number | null;
+  spo2: number | null;
+  risk_score: number;
+  updated_at: string | null;
 }
 
 function fmtTime(iso: string) {
@@ -91,26 +105,57 @@ async function refreshSession(s: Session): Promise<Session | null> {
 }
 
 async function ensureValidSession(s: Session): Promise<Session | null> {
-  // Refresh 60s before expiry to avoid edge-of-expiry races.
   if (s.expires_at - 60 > Math.floor(Date.now() / 1000)) return s;
   return refreshSession(s);
 }
 
 async function sbAuthed(token: string, path: string): Promise<Response> {
   return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: {
-      apikey: ANON_KEY,
-      Authorization: `Bearer ${token}`,
-    },
+    headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}` },
     cache: 'no-store',
   });
 }
+
+function bpStatus(sys: number | null, dia: number | null): 'ok' | 'warn' | 'alert' {
+  if (sys === null && dia === null) return 'ok';
+  if ((sys ?? 0) >= 140 || (dia ?? 0) >= 90) return 'alert';
+  if ((sys ?? 0) >= 130 || (dia ?? 0) >= 80) return 'warn';
+  return 'ok';
+}
+function a1cStatus(v: number | null): 'ok' | 'warn' | 'alert' {
+  if (v === null) return 'ok';
+  if (v >= 6.5) return 'alert';
+  if (v >= 5.7) return 'warn';
+  return 'ok';
+}
+function ldlStatus(v: number | null): 'ok' | 'warn' | 'alert' {
+  if (v === null) return 'ok';
+  if (v >= 190) return 'alert';
+  if (v >= 130) return 'warn';
+  return 'ok';
+}
+function hrStatus(v: number | null): 'ok' | 'warn' | 'alert' {
+  if (v === null) return 'ok';
+  if (v < 50 || v > 100) return 'alert';
+  if (v < 55 || v > 95) return 'warn';
+  return 'ok';
+}
+function spo2Status(v: number | null): 'ok' | 'warn' | 'alert' {
+  if (v === null) return 'ok';
+  if (v < 90) return 'alert';
+  if (v < 95) return 'warn';
+  return 'ok';
+}
+const statusColor = (s: 'ok' | 'warn' | 'alert') =>
+  s === 'alert' ? '#e8526e' : s === 'warn' ? '#d4a843' : '#00d4b8';
 
 export default function FamilyPage() {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [myRow, setMyRow] = useState<CareCircleRow | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
+  const [vitals, setVitals] = useState<FamilyVitals | null>(null);
+  const [vitalsErr, setVitalsErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -132,7 +177,6 @@ export default function FamilyPage() {
       setSession(valid);
 
       try {
-        // Family member's own care_circle row — RLS scopes to member_user_id = auth.uid().
         const myRowRes = await sbAuthed(
           valid.access_token,
           `care_circle?member_user_id=eq.${valid.user_id}&limit=1&select=*`,
@@ -146,8 +190,6 @@ export default function FamilyPage() {
         if (cancelled) return;
         setMyRow(me);
 
-        // Alerts for the linked patient — family-member RLS policy in
-        // CareIQ migration 0002 lets us read these.
         const alertsRes = await sbAuthed(
           valid.access_token,
           `care_circle_alerts?patient_id=eq.${me.patient_id}&order=fired_at.desc&limit=50&select=*`,
@@ -164,6 +206,25 @@ export default function FamilyPage() {
       } finally {
         if (!cancelled) setLoading(false);
       }
+
+      // Fetch vitals from CareIQ /api/family/vitals. Independent of the
+      // alerts/care_circle reads so we don't block the rest of the page on
+      // an external request.
+      try {
+        const r = await fetch(`${CAREIQ_URL}/api/family/vitals`, {
+          headers: { Authorization: `Bearer ${valid.access_token}` },
+          cache: 'no-store',
+        });
+        const data = (await r.json().catch(() => ({}))) as Partial<FamilyVitals> & { error?: string };
+        if (cancelled) return;
+        if (!r.ok) {
+          setVitalsErr(data.error || `vitals ${r.status}`);
+        } else {
+          setVitals(data as FamilyVitals);
+        }
+      } catch (e) {
+        if (!cancelled) setVitalsErr((e as Error).message);
+      }
     })();
     return () => {
       cancelled = true;
@@ -179,7 +240,7 @@ export default function FamilyPage() {
     return (
       <div style={PAGE_PAD}>
         <div style={{ fontSize: 12, color: '#7a9bbf', textAlign: 'center', padding: 32 }}>
-          Loading your Care Circle…
+          Loading your Care Circle...
         </div>
       </div>
     );
@@ -223,9 +284,56 @@ export default function FamilyPage() {
     );
   }
 
-  const patientName = session.patient_name || 'your loved one';
   const patientRef = session.patient_id.slice(0, 8);
+  const patientName = session.patient_name;
   const lastAlert = alerts[0];
+
+  const vitalCells = vitals
+    ? [
+        {
+          label: 'BP',
+          val:
+            vitals.bp_systolic != null && vitals.bp_diastolic != null
+              ? `${vitals.bp_systolic}/${vitals.bp_diastolic}`
+              : '—',
+          unit: 'mmHg',
+          status: bpStatus(vitals.bp_systolic, vitals.bp_diastolic),
+        },
+        {
+          label: 'A1C',
+          val: vitals.a1c != null ? vitals.a1c.toFixed(1) : '—',
+          unit: '%',
+          status: a1cStatus(vitals.a1c),
+        },
+        {
+          label: 'LDL',
+          val: vitals.ldl != null ? String(Math.round(vitals.ldl)) : '—',
+          unit: 'mg/dL',
+          status: ldlStatus(vitals.ldl),
+        },
+        {
+          label: 'HR',
+          val: vitals.hr != null ? String(vitals.hr) : '—',
+          unit: 'bpm',
+          status: hrStatus(vitals.hr),
+        },
+        {
+          label: 'SpO2',
+          val: vitals.spo2 != null ? String(vitals.spo2) : '—',
+          unit: '%',
+          status: spo2Status(vitals.spo2),
+        },
+      ]
+    : [];
+
+  const anyVitalEntered =
+    vitals &&
+    (vitals.bp_systolic != null ||
+      vitals.bp_diastolic != null ||
+      vitals.a1c != null ||
+      vitals.ldl != null ||
+      vitals.hr != null ||
+      vitals.spo2 != null);
 
   return (
     <div style={PAGE_PAD}>
@@ -248,10 +356,10 @@ export default function FamilyPage() {
             marginBottom: 4,
           }}
         >
-          {patientName}
+          {patientName ? patientName : `Patient ${patientRef}`}
         </div>
         <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf' }}>
-          Patient ref: {patientRef}…
+          Patient ref: {patientRef}...
         </div>
         <div
           style={{
@@ -301,10 +409,83 @@ export default function FamilyPage() {
               letterSpacing: '.1em',
             }}
           >
-            {myRow.alert_level === 'critical' ? '🚨 Critical only' : '🔔 All alerts'}
+            {myRow.alert_level === 'critical' ? 'Critical only' : 'All alerts'}
           </div>
         </div>
       </div>
+
+      {/* Vitals row from CareIQ */}
+      <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Latest vitals</div>
+      {anyVitalEntered ? (
+        <>
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              overflowX: 'auto',
+              scrollbarWidth: 'none',
+              marginBottom: 8,
+              paddingBottom: 4,
+            }}
+          >
+            {vitalCells.map((v) => (
+              <div
+                key={v.label}
+                style={{
+                  flexShrink: 0,
+                  background: CARD_BG,
+                  border: `1px solid ${statusColor(v.status)}30`,
+                  borderRadius: 12,
+                  padding: '11px 13px',
+                  minWidth: 88,
+                }}
+              >
+                <div
+                  style={{
+                    fontFamily: T,
+                    fontSize: 9,
+                    color: '#7a9bbf',
+                    textTransform: 'uppercase',
+                    letterSpacing: '.12em',
+                    marginBottom: 4,
+                  }}
+                >
+                  {v.label}
+                </div>
+                <div style={{ fontFamily: T, fontSize: 17, fontWeight: 600, color: statusColor(v.status) }}>
+                  {v.val}
+                </div>
+                <div style={{ fontSize: 9, color: '#7a9bbf', marginTop: 2 }}>{v.unit}</div>
+              </div>
+            ))}
+          </div>
+          {vitals?.updated_at && (
+            <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf', marginBottom: 12 }}>
+              Updated {fmtTime(vitals.updated_at)} · risk score {vitals.risk_score}
+            </div>
+          )}
+        </>
+      ) : (
+        <div
+          style={{
+            background: CARD_BG,
+            border: CARD_BORDER,
+            borderRadius: 12,
+            padding: 14,
+            fontSize: 11,
+            color: '#7a9bbf',
+            textAlign: 'center',
+            marginBottom: 12,
+            lineHeight: 1.55,
+          }}
+        >
+          {vitalsErr
+            ? `Vitals not available: ${vitalsErr}`
+            : vitals === null
+            ? 'Loading vitals from CareIQ...'
+            : 'No lab values on file. Vitals appear here after the patient enters them in CareIQ.'}
+        </div>
+      )}
 
       {/* Last alert */}
       <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Last alert</div>
@@ -334,7 +515,6 @@ export default function FamilyPage() {
               color: lastAlert.severity === 'critical' ? '#e8526e' : '#d4a843',
             }}
           >
-            {lastAlert.severity === 'critical' ? '🚨 ' : '⚠️ '}
             {lastAlert.metric} · {lastAlert.severity.toUpperCase()}
           </div>
           <div style={{ fontSize: 11, color: '#eef2f8', lineHeight: 1.55 }}>
@@ -354,14 +534,14 @@ export default function FamilyPage() {
             marginBottom: 12,
           }}
         >
-          ✅ No alerts yet — all monitored vitals are within safe range.
+          No alerts on file. All monitored thresholds are within range.
         </div>
       )}
 
       {/* Alert history */}
       {alerts.length > 1 && (
         <>
-          <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Alert History</div>
+          <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Alert history</div>
           {alerts.slice(1).map((a) => (
             <div
               key={a.id}
