@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'CareCircle — Eleanor Culwell',
+  title: 'CareCircle — Family Monitoring',
 };
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
