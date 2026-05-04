@@ -1,5 +1,132 @@
-import CareCircleApp from '@/components/CareCircleApp';
+'use client';
+
+import Link from 'next/link';
+import { Heart } from 'lucide-react';
+import FamilyPage from '@/components/dashboard/FamilyPage';
+
+const T = "'DM Mono',monospace";
+const O = "'Outfit',sans-serif";
+const P = "'Playfair Display',serif";
 
 export default function AppPage() {
-  return <CareCircleApp />;
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        background: '#07101f',
+        color: '#eef2f8',
+        fontFamily: O,
+      }}
+    >
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@300;400;500;600;700&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0}
+        @keyframes pulse-dot{0%,100%{opacity:.6;transform:scale(1)}50%{opacity:1;transform:scale(1.2)}}
+      `}</style>
+
+      {/* HEADER — minimal, no nav tabs */}
+      <header
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 10,
+          background: 'rgba(7,16,31,.97)',
+          backdropFilter: 'blur(20px)',
+          borderBottom: '1px solid rgba(0,212,184,.14)',
+        }}
+      >
+        {/* Glowing top edge */}
+        <div
+          style={{
+            height: 2,
+            background:
+              'linear-gradient(90deg,transparent,#00d4b8,#8060cc,#00d4b8,transparent)',
+          }}
+        />
+
+        <div
+          style={{
+            maxWidth: 480,
+            margin: '0 auto',
+            padding: '12px 18px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <Link
+            href="/"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              textDecoration: 'none',
+            }}
+          >
+            <div
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                background: 'linear-gradient(135deg,#00b89e,#8060cc)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 0 14px rgba(0,212,184,.3)',
+              }}
+            >
+              <Heart size={14} color="#fff" fill="#fff" />
+            </div>
+            <div>
+              <div
+                style={{ fontFamily: P, fontSize: 15, color: '#eef2f8', lineHeight: 1.1 }}
+              >
+                CareCircle
+              </div>
+              <div
+                style={{
+                  fontFamily: T,
+                  fontSize: 8,
+                  color: '#00d4b8',
+                  letterSpacing: '.18em',
+                  textTransform: 'uppercase',
+                  marginTop: 2,
+                }}
+              >
+                Family Monitoring
+              </div>
+            </div>
+          </Link>
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              fontFamily: T,
+              fontSize: 8,
+              color: '#4ade80',
+              letterSpacing: '.1em',
+              textTransform: 'uppercase',
+            }}
+          >
+            <div
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: '#4ade80',
+                animation: 'pulse-dot 2s infinite',
+              }}
+            />
+            Shield On
+          </div>
+        </div>
+      </header>
+
+      {/* DASHBOARD — alerts only, nothing else */}
+      <main style={{ maxWidth: 480, margin: '0 auto' }}>
+        <FamilyPage />
+      </main>
+    </div>
+  );
 }
