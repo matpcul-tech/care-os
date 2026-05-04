@@ -23,7 +23,7 @@ interface CCSession {
 
 interface CareCircleRow {
   patient_id: string;
-  patient_name: string | null;
+  patient_name?: string | null;
 }
 
 interface SupabaseTokenResponse {
@@ -38,6 +38,11 @@ interface SupabaseAuthError {
   msg?: string;
   message?: string;
 }
+
+type LookupResult =
+  | { kind: 'row'; row: CareCircleRow }
+  | { kind: 'no_row' }
+  | { kind: 'query_failed'; status: number; body: string };
 
 const card: React.CSSProperties = {
   background: 'rgba(255,255,255,.04)',
@@ -105,26 +110,52 @@ async function refreshSession(s: CCSession): Promise<CCSession | null> {
   return updated;
 }
 
-// After password login, query the family member's care_circle row to find
-// which patient they're linked to and their name. Reads through RLS scoped
-// to member_user_id = auth.uid(), so the JWT must be passed.
-async function lookupCircle(
+async function fetchCircle(
   accessToken: string,
   userId: string,
-): Promise<CareCircleRow | null> {
+  select: string,
+): Promise<{ ok: true; rows: CareCircleRow[] } | { ok: false; status: number; body: string }> {
   const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/care_circle?member_user_id=eq.${userId}&select=patient_id,patient_name&limit=1`,
+    `${SUPABASE_URL}/rest/v1/care_circle?member_user_id=eq.${userId}&select=${select}&limit=1`,
     {
-      headers: {
-        apikey: ANON_KEY,
-        Authorization: `Bearer ${accessToken}`,
-      },
+      headers: { apikey: ANON_KEY, Authorization: `Bearer ${accessToken}` },
       cache: 'no-store',
     },
   );
-  if (!r.ok) return null;
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    return { ok: false, status: r.status, body: body.slice(0, 240) };
+  }
   const rows = (await r.json()) as CareCircleRow[];
-  return rows[0] ?? null;
+  return { ok: true, rows };
+}
+
+// After password login, look up the family member's care_circle row.
+// First tries the full select (patient_id + patient_name). If Postgres
+// 400s on a missing column (migration not yet applied in prod), falls
+// back to a patient_id-only select so login still completes. Returns
+// a discriminated result so the UI can show the real reason instead of
+// a generic message.
+async function lookupCircle(
+  accessToken: string,
+  userId: string,
+): Promise<LookupResult> {
+  const full = await fetchCircle(accessToken, userId, 'patient_id,patient_name');
+  if (full.ok) {
+    return full.rows[0] ? { kind: 'row', row: full.rows[0] } : { kind: 'no_row' };
+  }
+  // 400 from PostgREST on an unknown column reads "column ... does not exist".
+  // Retry without patient_name so a missing migration isn't a blocker.
+  const looksLikeMissingColumn =
+    full.status === 400 && /column|patient_name/i.test(full.body);
+  if (looksLikeMissingColumn) {
+    const minimal = await fetchCircle(accessToken, userId, 'patient_id');
+    if (minimal.ok) {
+      return minimal.rows[0] ? { kind: 'row', row: minimal.rows[0] } : { kind: 'no_row' };
+    }
+    return { kind: 'query_failed', status: minimal.status, body: minimal.body };
+  }
+  return { kind: 'query_failed', status: full.status, body: full.body };
 }
 
 export default function LoginPage() {
@@ -200,21 +231,32 @@ export default function LoginPage() {
 
       const data = (await tokenRes.json()) as SupabaseTokenResponse;
 
-      const cc = await lookupCircle(data.access_token, data.user.id);
-      if (!cc) {
+      const result = await lookupCircle(data.access_token, data.user.id);
+
+      if (result.kind === 'no_row') {
         setError(
-          'Logged in, but no Care Circle membership found for this account. Use your invite link to join a Care Circle.',
+          'You are signed in, but no Care Circle is linked to this email. ' +
+            'Ask the patient to send you an invite link, then open that link to join.',
         );
         return;
       }
 
+      if (result.kind === 'query_failed') {
+        setError(
+          `Sign-in succeeded but the Care Circle lookup failed (status ${result.status}). ` +
+            `Send this to support: "${result.body || 'no body'}"`,
+        );
+        return;
+      }
+
+      const cc = result.row;
       const session: CCSession = {
         access_token: data.access_token,
         refresh_token: data.refresh_token,
         expires_at: data.expires_at,
         user_id: data.user.id,
         patient_id: cc.patient_id,
-        patient_name: cc.patient_name,
+        patient_name: cc.patient_name ?? null,
       };
       window.localStorage.setItem('cc-session', JSON.stringify(session));
       router.replace('/app');
