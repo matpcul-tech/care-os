@@ -20,22 +20,24 @@ import CareIQPage from './dashboard/CareIQPage';
 import ShieldPage from './dashboard/ShieldPage';
 import AIPage from './dashboard/AIPage';
 
+// Emoji bottom-nav restored to match the original CareCircle aesthetic.
+// All labels are short. Icons are emoji glyphs.
 const FNAV = [
-  { id: 'home', ico: 'Hm', lbl: 'Home' },
-  { id: 'meds', ico: 'Rx', lbl: 'Meds' },
-  { id: 'calendar', ico: 'Cl', lbl: 'Cal' },
-  { id: 'tasks', ico: 'Tk', lbl: 'Tasks' },
-  { id: 'vault', ico: 'Vt', lbl: 'Vault' },
-  { id: 'family', ico: 'Fm', lbl: 'Family' },
-  { id: 'ai', ico: 'AI', lbl: 'AI' },
-  { id: 'emergency', ico: 'SOS', lbl: 'SOS' },
+  { id: 'home', ico: '🏠', lbl: 'Home' },
+  { id: 'meds', ico: '💊', lbl: 'Meds' },
+  { id: 'calendar', ico: '📅', lbl: 'Cal' },
+  { id: 'tasks', ico: '✅', lbl: 'Tasks' },
+  { id: 'vault', ico: '🔐', lbl: 'Vault' },
+  { id: 'family', ico: '👪', lbl: 'Family' },
+  { id: 'ai', ico: '🤝', lbl: 'AI' },
+  { id: 'emergency', ico: '🚨', lbl: 'SOS' },
 ];
 const CNAV = [
-  { id: 'careiq', ico: 'IQ', lbl: 'CareIQ' },
-  { id: 'meds', ico: 'Rx', lbl: 'Meds' },
-  { id: 'tasks', ico: 'Tk', lbl: 'Tasks' },
-  { id: 'ai', ico: 'AI', lbl: 'AI' },
-  { id: 'shield', ico: 'Sh', lbl: 'Shield' },
+  { id: 'careiq', ico: '⚕️', lbl: 'CareIQ' },
+  { id: 'meds', ico: '💊', lbl: 'Meds' },
+  { id: 'tasks', ico: '📋', lbl: 'Tasks' },
+  { id: 'ai', ico: '🤝', lbl: 'AI' },
+  { id: 'shield', ico: '🔒', lbl: 'Shield' },
 ];
 
 export default function CareCircleApp() {
@@ -102,8 +104,7 @@ export default function CareCircleApp() {
   const nav = view === 'family' ? FNAV : CNAV;
   const validPages = nav.map((n) => n.id);
   const activePage = validPages.includes(page) ? page : nav[0].id;
-  const patientRef = session.patient_id.slice(0, 8);
-  const patientLabel = session.patient_name || 'Your loved one';
+  const patientLabel = session.patient_name || `Patient ${session.patient_id.slice(0, 8)}`;
 
   const renderPage = () => {
     switch (activePage) {
@@ -121,12 +122,7 @@ export default function CareCircleApp() {
         return <EmergencyPage session={session} />;
       case 'ai':
         return (
-          <AIPage
-            session={session}
-            msgs={chatMsgs}
-            setMsgs={setChatMsgs}
-            addLog={addLog}
-          />
+          <AIPage session={session} msgs={chatMsgs} setMsgs={setChatMsgs} addLog={addLog} />
         );
       case 'careiq':
         return <CareIQPage session={session} />;
@@ -199,14 +195,13 @@ export default function CareCircleApp() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: 18,
+                fontSize: 20,
                 color: '#fff',
-                fontWeight: 700,
                 boxShadow: '0 4px 18px rgba(0,212,184,.25)',
                 flexShrink: 0,
               }}
             >
-              +
+              {'🤝'}
             </div>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: '#eef2f8' }}>
@@ -229,7 +224,7 @@ export default function CareCircleApp() {
           <div style={{ textAlign: 'right', flexShrink: 0 }}>
             <div style={{ fontSize: 12, fontWeight: 600 }}>{patientLabel}</div>
             <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf', marginTop: 1 }}>
-              Patient {patientRef}...
+              {session.patient_id.slice(0, 8)}...
             </div>
             <div
               style={{
@@ -289,7 +284,7 @@ export default function CareCircleApp() {
             boxShadow: view === 'family' ? '0 0 14px rgba(0,212,184,.25)' : 'none',
           }}
         >
-          Family View
+          {'👪'} Family View
         </button>
         <button
           onClick={() => {
@@ -313,7 +308,7 @@ export default function CareCircleApp() {
             boxShadow: view === 'clinical' ? '0 0 14px rgba(128,96,204,.25)' : 'none',
           }}
         >
-          Clinical View
+          {'⚕️'} Clinical View
         </button>
       </div>
 
@@ -378,7 +373,7 @@ export default function CareCircleApp() {
               transition: 'color .2s',
             }}
           >
-            <span style={{ fontSize: 13, fontFamily: T, fontWeight: 600 }}>{n.ico}</span>
+            <span style={{ fontSize: 18 }}>{n.ico}</span>
             <span style={{ fontSize: 8, fontWeight: 600, letterSpacing: '.05em', textTransform: 'uppercase' }}>
               {n.lbl}
             </span>
