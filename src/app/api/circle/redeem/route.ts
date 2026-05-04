@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'edge';
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 const ALERT_LEVELS = ['critical', 'informational'] as const;
 type AlertLevel = (typeof ALERT_LEVELS)[number];
@@ -37,28 +37,50 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-function bad(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status, headers: CORS_HEADERS });
+function bad(message: string, status = 400, debug?: unknown) {
+  const body: Record<string, unknown> = { error: message };
+  if (debug !== undefined) body.debug = debug;
+  return NextResponse.json(body, { status, headers: CORS_HEADERS });
 }
 
 function isEmail(s: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
 
-async function lookupInvite(code: string): Promise<InviteRow | null> {
-  const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/care_circle_invites?code=eq.${encodeURIComponent(code)}&select=*&limit=1`,
-    {
-      headers: {
-        apikey: SERVICE_ROLE,
-        Authorization: `Bearer ${SERVICE_ROLE}`,
-      },
-      cache: 'no-store',
+// Returns the first env-var problem, or null if all required vars are set.
+function envProblem(): string | null {
+  if (!SUPABASE_URL) return 'NEXT_PUBLIC_SUPABASE_URL not set';
+  if (!ANON_KEY) return 'NEXT_PUBLIC_SUPABASE_ANON_KEY not set';
+  if (!SERVICE_ROLE) return 'SUPABASE_SERVICE_ROLE_KEY not set';
+  return null;
+}
+
+interface LookupResult {
+  invite: InviteRow | null;
+  status: number;
+  bodyText: string;
+}
+
+async function lookupInvite(code: string): Promise<LookupResult> {
+  const url = `${SUPABASE_URL}/rest/v1/care_circle_invites?code=eq.${encodeURIComponent(code)}&select=*&limit=1`;
+  const r = await fetch(url, {
+    headers: {
+      apikey: SERVICE_ROLE,
+      Authorization: `Bearer ${SERVICE_ROLE}`,
     },
-  );
-  if (!r.ok) return null;
-  const rows = (await r.json()) as InviteRow[];
-  return rows[0] || null;
+    cache: 'no-store',
+  });
+  const bodyText = await r.text();
+  if (!r.ok) {
+    return { invite: null, status: r.status, bodyText };
+  }
+  let rows: InviteRow[] = [];
+  try {
+    rows = JSON.parse(bodyText) as InviteRow[];
+  } catch {
+    return { invite: null, status: r.status, bodyText: 'unparseable JSON' };
+  }
+  return { invite: rows[0] || null, status: r.status, bodyText };
 }
 
 function inviteUsable(invite: InviteRow): { ok: true } | { ok: false; reason: string } {
@@ -79,11 +101,24 @@ export async function OPTIONS() {
 // member fills in their password.
 export async function GET(req: NextRequest) {
   try {
+    const envErr = envProblem();
+    if (envErr) {
+      console.error('[redeem GET] env', envErr);
+      return bad('server misconfigured', 500, { env: envErr });
+    }
+
     const url = new URL(req.url);
     const code = (url.searchParams.get('code') || '').trim().toUpperCase();
     if (!code) return bad('code required');
 
-    const invite = await lookupInvite(code);
+    const { invite, status, bodyText } = await lookupInvite(code);
+    if (status !== 200) {
+      console.error('[redeem GET]', `code:${code}`, 'supabase status', status, bodyText.slice(0, 240));
+      return bad('lookup failed', 502, {
+        supabase_status: status,
+        supabase_body: bodyText.slice(0, 240),
+      });
+    }
     if (!invite) return bad('invite not found', 404);
 
     const usable = inviteUsable(invite);
@@ -99,8 +134,10 @@ export async function GET(req: NextRequest) {
       },
       { headers: CORS_HEADERS },
     );
-  } catch {
-    return bad('Internal error', 500);
+  } catch (e) {
+    const msg = (e as Error)?.message || 'unknown';
+    console.error('[redeem GET] threw', msg);
+    return bad('Internal error', 500, { exception: msg });
   }
 }
 
@@ -108,6 +145,12 @@ export async function GET(req: NextRequest) {
 // care_circle row, mark invite used, return a session.
 export async function POST(req: NextRequest) {
   try {
+    const envErr = envProblem();
+    if (envErr) {
+      console.error('[redeem POST] env', envErr);
+      return bad('server misconfigured', 500, { env: envErr });
+    }
+
     const body = (await req.json()) as RedeemBody;
     const code = (body.code || '').trim().toUpperCase();
     const email = (body.email || '').trim().toLowerCase();
@@ -122,7 +165,14 @@ export async function POST(req: NextRequest) {
     if (password.length < 8) return bad('password must be at least 8 characters');
     if (!member_name) return bad('member_name required');
 
-    const invite = await lookupInvite(code);
+    const { invite, status, bodyText } = await lookupInvite(code);
+    if (status !== 200) {
+      console.error('[redeem POST]', `code:${code}`, 'supabase status', status, bodyText.slice(0, 240));
+      return bad('lookup failed', 502, {
+        supabase_status: status,
+        supabase_body: bodyText.slice(0, 240),
+      });
+    }
     if (!invite) return bad('invite not found', 404);
     const usable = inviteUsable(invite);
     if (!usable.ok) return bad(usable.reason, 410);
@@ -161,7 +211,11 @@ export async function POST(req: NextRequest) {
       ) {
         return bad('an account with this email already exists', 409);
       }
-      return bad(`auth create failed: ${createRes.status} ${txt}`, 500);
+      console.error('[redeem POST] auth create', createRes.status, txt.slice(0, 240));
+      return bad('auth create failed', 500, {
+        supabase_status: createRes.status,
+        supabase_body: txt.slice(0, 240),
+      });
     }
     const newUser = (await createRes.json()) as { id: string; email: string };
 
@@ -189,15 +243,17 @@ export async function POST(req: NextRequest) {
     });
 
     if (!insertRes.ok) {
+      const txt = await insertRes.text();
       // Roll back the auth account so the user can retry with a fresh row.
       await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${newUser.id}`, {
         method: 'DELETE',
         headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
       });
-      return bad(
-        `circle insert failed: ${insertRes.status} ${await insertRes.text()}`,
-        500,
-      );
+      console.error('[redeem POST] circle insert', insertRes.status, txt.slice(0, 240));
+      return bad('circle insert failed', 500, {
+        supabase_status: insertRes.status,
+        supabase_body: txt.slice(0, 240),
+      });
     }
     const circleRow = ((await insertRes.json()) as Array<Record<string, unknown>>)[0];
 
@@ -239,7 +295,9 @@ export async function POST(req: NextRequest) {
       },
       { headers: CORS_HEADERS },
     );
-  } catch {
-    return bad('Internal error', 500);
+  } catch (e) {
+    const msg = (e as Error)?.message || 'unknown';
+    console.error('[redeem POST] threw', msg);
+    return bad('Internal error', 500, { exception: msg });
   }
 }
