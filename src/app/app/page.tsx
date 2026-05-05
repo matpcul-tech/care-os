@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Heart } from 'lucide-react';
 import FamilyPage from '@/components/dashboard/FamilyPage';
 
@@ -9,6 +10,14 @@ const O = "'Outfit',sans-serif";
 const P = "'Playfair Display',serif";
 
 export default function AppPage() {
+  const router = useRouter();
+  const signOut = () => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem('cc-session');
+    }
+    router.push('/login');
+  };
+
   return (
     <div
       style={{
@@ -24,7 +33,6 @@ export default function AppPage() {
         @keyframes pulse-dot{0%,100%{opacity:.6;transform:scale(1)}50%{opacity:1;transform:scale(1.2)}}
       `}</style>
 
-      {/* HEADER, minimal, no nav tabs */}
       <header
         style={{
           position: 'sticky',
@@ -35,7 +43,6 @@ export default function AppPage() {
           borderBottom: '1px solid rgba(0,212,184,.14)',
         }}
       >
-        {/* Glowing top edge */}
         <div
           style={{
             height: 2,
@@ -158,9 +165,27 @@ export default function AppPage() {
         </div>
       </header>
 
-      {/* DASHBOARD, alerts only */}
       <main style={{ maxWidth: 480, margin: '0 auto' }}>
         <FamilyPage />
+        <div style={{ padding: '0 18px 24px' }}>
+          <button
+            onClick={signOut}
+            style={{
+              width: '100%',
+              padding: '10px 0',
+              borderRadius: 10,
+              border: '1px solid rgba(0,212,184,.14)',
+              cursor: 'pointer',
+              background: 'rgba(255,255,255,.04)',
+              color: '#7a9bbf',
+              fontSize: 11,
+              fontWeight: 600,
+              fontFamily: O,
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </main>
     </div>
   );

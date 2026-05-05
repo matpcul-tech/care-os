@@ -220,10 +220,6 @@ export default function FamilyPage() {
         if (!cancelled) setLoading(false);
       }
 
-      // Fetch decrypted vitals from CareIQ /api/shield/decrypt. The Bearer
-      // JWT tells the Shield endpoint we're a family member; the endpoint
-      // verifies, looks up care_circle, decrypts server-side, and returns
-      // the sanitized subset.
       try {
         const r = await fetch(`${CAREIQ_URL}/api/shield/decrypt`, {
           headers: { Authorization: `Bearer ${valid.access_token}` },
@@ -353,7 +349,9 @@ export default function FamilyPage() {
 
   return (
     <div style={PAGE_PAD}>
-      {/* Patient header */}
+      {/* Patient header. The Sign out button is provided by the surrounding
+          wrapper (CareCircleApp on /dashboard, AppPage on /app) so there is
+          a single Sign out per route. */}
       <div style={SECTION_LABEL}>You are monitoring</div>
       <div
         style={{
@@ -523,7 +521,6 @@ export default function FamilyPage() {
         </div>
       )}
 
-      {/* Last alert */}
       <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Last alert</div>
       {lastAlert ? (
         <div
@@ -574,7 +571,6 @@ export default function FamilyPage() {
         </div>
       )}
 
-      {/* Alert history */}
       {alerts.length > 1 && (
         <>
           <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Alert history</div>
@@ -611,25 +607,6 @@ export default function FamilyPage() {
           ))}
         </>
       )}
-
-      <button
-        onClick={signOut}
-        style={{
-          width: '100%',
-          marginTop: 24,
-          padding: '10px 0',
-          borderRadius: 10,
-          border: '1px solid rgba(0,212,184,.14)',
-          cursor: 'pointer',
-          background: 'rgba(255,255,255,.04)',
-          color: '#7a9bbf',
-          fontSize: 11,
-          fontWeight: 600,
-          fontFamily: O,
-        }}
-      >
-        Sign out
-      </button>
     </div>
   );
 }
