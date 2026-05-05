@@ -16,6 +16,7 @@ const CAREIQ_URL =
 // ---------------------------------------------------------------------------
 type Source = 'lab' | 'wearable' | 'self_reported';
 type BiomarkerStatus = 'ok' | 'suboptimal' | 'outside_normal' | 'unknown';
+type BiomarkerTrend = 'improving' | 'stable' | 'declining' | null;
 type Sex = 'male' | 'female' | 'unknown';
 
 interface BiomarkerResponse {
@@ -31,7 +32,7 @@ interface BiomarkerResponse {
   bar_min: number;
   bar_max: number;
   status: BiomarkerStatus;
-  trend: 'improving' | 'stable' | 'declining' | null;
+  trend: BiomarkerTrend;
 }
 
 type CategoryKey =
@@ -50,7 +51,6 @@ interface ShieldPayload {
   patient_id: string;
   bp_systolic: number | null;
   bp_diastolic: number | null;
-  // Legacy flat fields preserved by the endpoint for back-compat.
   hr: number | null;
   steps: number | null;
   spo2: number | null;
@@ -70,9 +70,6 @@ interface ShieldPayload {
   sex: Sex;
 }
 
-// ---------------------------------------------------------------------------
-// Visual tokens. Match CareIQ palette.
-// ---------------------------------------------------------------------------
 const OK = '#00d4b8';
 const WARN = '#d4a843';
 const ALERT = '#e8526e';
@@ -92,6 +89,27 @@ function statusLabel(s: BiomarkerStatus): string {
   if (s === 'suboptimal') return 'Suboptimal';
   if (s === 'outside_normal') return 'Outside normal';
   return 'Not yet entered';
+}
+
+function trendColor(t: BiomarkerTrend): string {
+  if (t === 'improving') return GREEN;
+  if (t === 'stable') return MUTED;
+  if (t === 'declining') return ALERT;
+  return MUTED;
+}
+
+function trendArrow(t: BiomarkerTrend): string {
+  if (t === 'improving') return '↑';
+  if (t === 'stable') return '→';
+  if (t === 'declining') return '↓';
+  return '';
+}
+
+function trendLabel(t: BiomarkerTrend): string {
+  if (t === 'improving') return 'Improving';
+  if (t === 'stable') return 'Stable';
+  if (t === 'declining') return 'Declining';
+  return '';
 }
 
 function shieldTime(iso: string): string {
@@ -139,8 +157,6 @@ const CATEGORY_ORDER: CategoryKey[] = [
   'cognitive',
 ];
 
-// Within each category we render in this preferred order. Keys not in the
-// list fall through alphabetically.
 const KEY_ORDER: Record<CategoryKey, string[]> = {
   metabolic: ['fasting_glucose', 'fasting_insulin', 'homa_ir', 'a1c', 'uric_acid'],
   cardiovascular: [
@@ -209,10 +225,6 @@ const LABELS: Record<string, string> = {
   executive_function: 'Executive Function',
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function formatValue(v: number | null, precision: number): string {
   if (v === null) return 'Not yet entered';
   if (precision === 0) return String(Math.round(v));
@@ -260,14 +272,11 @@ function computeBarSegments(b: BiomarkerResponse): BarSegment[] {
   const min = b.bar_min;
   const max = b.bar_max;
   if (max <= min) return [];
-
-  // Collect breakpoints inside (min, max).
   const raw = new Set<number>([min, max]);
   for (const v of [b.normal_low, b.normal_high, b.optimal_low, b.optimal_high]) {
     if (v !== null && v > min && v < max) raw.add(v);
   }
   const sorted = Array.from(raw).sort((x, y) => x - y);
-
   const pct = (n: number) => ((n - min) / (max - min)) * 100;
   const segments: BarSegment[] = [];
   for (let i = 0; i < sorted.length - 1; i++) {
@@ -277,7 +286,6 @@ function computeBarSegments(b: BiomarkerResponse): BarSegment[] {
     const color = zoneColorAt(mid, b);
     segments.push({ fromPct: pct(from), toPct: pct(to), color });
   }
-  // Merge adjacent segments of the same color for cleaner DOM.
   const merged: BarSegment[] = [];
   for (const seg of segments) {
     const last = merged[merged.length - 1];
@@ -318,10 +326,6 @@ function rangeSummary(b: BiomarkerResponse): string {
   return [optStr, normStr].filter(Boolean).join(' · ');
 }
 
-// ---------------------------------------------------------------------------
-// Visual primitives
-// ---------------------------------------------------------------------------
-
 function ShieldBadge({ decryptedAt }: { decryptedAt: string }) {
   const hhmm = shieldTime(decryptedAt);
   return (
@@ -344,6 +348,36 @@ function ShieldBadge({ decryptedAt }: { decryptedAt: string }) {
     >
       Shield {hhmm}
     </div>
+  );
+}
+
+function TrendPill({ trend }: { trend: BiomarkerTrend }) {
+  if (trend === null) return null;
+  const c = trendColor(trend);
+  return (
+    <span
+      title={`Trend vs previous reading: ${trendLabel(trend).toLowerCase()}`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 3,
+        fontFamily: T,
+        fontSize: 8,
+        padding: '2px 7px',
+        borderRadius: 6,
+        background: `${c}1f`,
+        color: c,
+        border: `1px solid ${c}55`,
+        textTransform: 'uppercase',
+        letterSpacing: '.1em',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span aria-hidden style={{ fontSize: 10, lineHeight: 1 }}>
+        {trendArrow(trend)}
+      </span>
+      {trendLabel(trend)}
+    </span>
   );
 }
 
@@ -513,7 +547,8 @@ function BiomarkerRow({
         >
           {summary || ' '}
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
+          <TrendPill trend={b.trend} />
           <StatusPill status={b.status} />
           <ShieldBadge decryptedAt={decryptedAt} />
         </div>
@@ -556,9 +591,6 @@ function CategorySection({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Risk ring
-// ---------------------------------------------------------------------------
 const RING_R = 37;
 const RING_C = 2 * Math.PI * RING_R;
 
@@ -625,7 +657,6 @@ function RiskRing({ score, loaded }: { score: number; loaded: boolean }) {
   );
 }
 
-// ---------------------------------------------------------------------------
 export default function CareIQPage({ session }: { session: CCSession }) {
   const [payload, setPayload] = useState<ShieldPayload | null>(null);
   const [vitalsErr, setVitalsErr] = useState<string | null>(null);
@@ -681,14 +712,10 @@ export default function CareIQPage({ session }: { session: CCSession }) {
   const score = payload?.risk_score ?? 0;
   const decryptedAt = payload?.decrypted_at ?? new Date().toISOString();
   const sex = payload?.sex ?? 'unknown';
-
-  // Quick-glance vitals chip row for BP only (other vitals now live inside
-  // the categorized panel below).
   const showBpChip = payload && (payload.bp_systolic !== null || payload.bp_diastolic !== null);
 
   return (
     <div style={PAGE_PAD}>
-      {/* Risk score header card */}
       <div
         style={{
           background:
@@ -725,7 +752,6 @@ export default function CareIQPage({ session }: { session: CCSession }) {
         </div>
       </div>
 
-      {/* Panel summary card */}
       {loaded && (payload!.panel_in_range > 0 || payload!.panel_flagged > 0) && (
         <div
           style={{
@@ -796,7 +822,6 @@ export default function CareIQPage({ session }: { session: CCSession }) {
         </div>
       )}
 
-      {/* BP quick-glance chip (vitals not in biomarker panel) */}
       {showBpChip && (
         <>
           <div style={SECTION_LABEL}>Blood Pressure</div>
@@ -836,7 +861,6 @@ export default function CareIQPage({ session }: { session: CCSession }) {
         </>
       )}
 
-      {/* Longevity Biomarker Panel grouped by category */}
       {loaded &&
         CATEGORY_ORDER.map((cat) => (
           <CategorySection
@@ -866,7 +890,6 @@ export default function CareIQPage({ session }: { session: CCSession }) {
         </div>
       )}
 
-      {/* Clinical alerts */}
       <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Clinical alerts</div>
       {alertsErr && (
         <div
