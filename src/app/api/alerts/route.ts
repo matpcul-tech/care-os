@@ -12,6 +12,9 @@ const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_FROM = process.env.TWILIO_FROM_NUMBER;
 
+const CAREIQ_ALERT_SIGNING_KEY = process.env.CAREIQ_ALERT_SIGNING_KEY;
+const SIGNATURE_MAX_AGE_SEC = 300;
+
 type Severity = 'critical' | 'informational';
 
 interface Vitals {
@@ -21,10 +24,18 @@ interface Vitals {
   bp_diastolic?: number | null;
 }
 
+interface PanelGradeChange {
+  prev_grade: string;
+  new_grade: string;
+  flagged?: number;
+  in_range?: number;
+}
+
 interface AlertsBody {
   patient_id?: string;
   patientId?: string;
   vitals?: Vitals;
+  panel_grade_change?: PanelGradeChange;
 }
 
 interface Flag {
@@ -104,6 +115,74 @@ function evaluate(v: Vitals): Flag[] {
   return flags;
 }
 
+// ---------------------------------------------------------------------------
+// Longevity panel-grade alerts (phase 4). Triggered by CareIQ when the
+// patient's saved labs cause panel_grade to drop one or more letters.
+// Signature is mandatory on any request that carries a panel_grade_change.
+// ---------------------------------------------------------------------------
+
+const GRADE_ORDER: Record<string, number> = { A: 0, B: 1, C: 2, D: 3, F: 4 };
+
+function stepsDropped(prev: string, next: string): number {
+  if (!(prev in GRADE_ORDER) || !(next in GRADE_ORDER)) return 0;
+  return Math.max(0, GRADE_ORDER[next] - GRADE_ORDER[prev]);
+}
+
+function flagFromGradeChange(c: PanelGradeChange): Flag | null {
+  const drop = stepsDropped(c.prev_grade, c.new_grade);
+  if (drop <= 0) return null;
+  const severity: Severity = drop >= 2 ? 'critical' : 'informational';
+  const flaggedDesc =
+    typeof c.flagged === 'number' ? `${c.flagged} biomarkers` : 'Multiple biomarkers';
+  const recommendation =
+    drop >= 2
+      ? `Longevity panel grade dropped sharply from ${c.prev_grade} to ${c.new_grade}. ${flaggedDesc} are now outside the optimal range. Recommend a care-team review within 24 hours.`
+      : `Longevity panel grade dropped from ${c.prev_grade} to ${c.new_grade}. ${flaggedDesc} are now outside the optimal range. Schedule a follow-up to review labs and lifestyle factors within 14 days.`;
+  return {
+    metric: 'Longevity Panel Grade',
+    severity,
+    recommendation,
+  };
+}
+
+function toHex(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) {
+    out += bytes[i].toString(16).padStart(2, '0');
+  }
+  return out;
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+async function verifyHmac(
+  secret: string,
+  ts: string,
+  rawBody: string,
+  expectedHex: string,
+): Promise<boolean> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(ts + ':' + rawBody));
+  const actual = toHex(new Uint8Array(sig));
+  return constantTimeEqual(actual, expectedHex.toLowerCase());
+}
+
+// ---------------------------------------------------------------------------
+
 async function sb(
   method: 'GET' | 'POST',
   path: string,
@@ -136,8 +215,8 @@ async function sendAlertEmail(args: {
   const hasCritical = args.flags.some((f) => f.severity === 'critical');
   const patientRef = args.patientId.slice(0, 8);
   const subject = hasCritical
-    ? `[Critical] CareCircle health alert — Patient ${patientRef}`
-    : `CareCircle health alert — Patient ${patientRef}`;
+    ? `[Critical] CareCircle health alert · Patient ${patientRef}`
+    : `CareCircle health alert · Patient ${patientRef}`;
 
   const items = args.flags
     .map((f) => {
@@ -145,7 +224,7 @@ async function sendAlertEmail(args: {
       return `
     <li style="margin:0 0 14px">
       <div style="font-weight:600;color:${color}">
-        ${f.metric} &middot; ${f.severity.toUpperCase()}
+        ${f.metric} · ${f.severity.toUpperCase()}
       </div>
       <div style="color:#333">${f.recommendation}</div>
     </li>`;
@@ -181,9 +260,6 @@ async function sendAlertEmail(args: {
   return { sent: true as const, id: data.id ?? null };
 }
 
-// Emergency SMS fan-out via Twilio. Only fires for CRITICAL severity events
-// and only to members with a phone on file. SMS body contains metric +
-// recommendation + patient ref — no PHI, no raw values.
 async function sendSms(args: {
   to: string;
   body: string;
@@ -217,13 +293,12 @@ async function sendSms(args: {
 
 function buildSmsBody(patientRef: string, criticalFlags: Flag[]): string {
   const lines: string[] = [
-    `[CRITICAL] CareCircle alert (Patient ${patientRef}…)`,
+    `[CRITICAL] CareCircle alert (Patient ${patientRef}...)`,
   ];
   for (const f of criticalFlags) {
-    lines.push(`• ${f.metric}: ${f.recommendation}`);
+    lines.push(`* ${f.metric}: ${f.recommendation}`);
   }
   lines.push('Sign in to CareCircle for details. No PHI in this message.');
-  // Twilio hard cap is 1600 chars; trim defensively.
   const body = lines.join('\n');
   return body.length > 1500 ? `${body.slice(0, 1497)}...` : body;
 }
@@ -241,9 +316,6 @@ async function persistAlerts(args: {
   const smsByMember = new Map<string, SmsResult>();
   for (const s of args.smsDelivery) smsByMember.set(s.member_id, s);
 
-  // For each flag, the visible recipients are:
-  //   - all 'informational' members (they see everything)
-  //   - all members if the flag is critical (critical members also see it)
   const visibleFor = (flag: Flag) =>
     args.members.filter(
       (m) => m.alert_level === 'informational' || flag.severity === 'critical',
@@ -307,12 +379,59 @@ async function persistAlerts(args: {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as AlertsBody;
+    // Read raw body once: HMAC verification needs the byte-exact body, then
+    // we parse JSON.
+    const rawBody = await req.text();
+
+    let body: AlertsBody;
+    try {
+      body = JSON.parse(rawBody) as AlertsBody;
+    } catch {
+      return bad('invalid JSON');
+    }
+
     const patientId = body.patient_id || body.patientId;
     if (!patientId) return bad('patient_id required');
-    if (!body.vitals || typeof body.vitals !== 'object') return bad('vitals required');
 
-    const flags = evaluate(body.vitals);
+    // ----- Authenticate signed grade-change requests -----
+    if (body.panel_grade_change) {
+      if (!CAREIQ_ALERT_SIGNING_KEY) {
+        return bad('signing key not configured on care-os', 500);
+      }
+      const sigHeader = req.headers.get('x-alert-signature') || '';
+      const tsHeader = req.headers.get('x-alert-timestamp') || '';
+      if (!sigHeader || !tsHeader) {
+        return bad('signature and timestamp headers required for grade change', 401);
+      }
+      const ts = Number(tsHeader);
+      if (!Number.isFinite(ts)) {
+        return bad('invalid timestamp', 401);
+      }
+      const now = Math.floor(Date.now() / 1000);
+      if (Math.abs(now - ts) > SIGNATURE_MAX_AGE_SEC) {
+        return bad('signature stale', 401);
+      }
+      const ok = await verifyHmac(
+        CAREIQ_ALERT_SIGNING_KEY,
+        tsHeader,
+        rawBody,
+        sigHeader,
+      );
+      if (!ok) {
+        return bad('signature mismatch', 401);
+      }
+    }
+
+    // ----- Build flags from vitals threshold + grade change -----
+    const vitalFlags: Flag[] = body.vitals && typeof body.vitals === 'object'
+      ? evaluate(body.vitals)
+      : [];
+    const gradeFlag = body.panel_grade_change
+      ? flagFromGradeChange(body.panel_grade_change)
+      : null;
+    const flags: Flag[] = [...vitalFlags];
+    if (gradeFlag) flags.push(gradeFlag);
+
     if (flags.length === 0) {
       return NextResponse.json({
         flagged: false,
@@ -335,7 +454,6 @@ export async function POST(req: NextRequest) {
     const criticalFlags = flags.filter((f) => f.severity === 'critical');
     const patientRef = patientId.slice(0, 8);
 
-    // 1. Email fan-out (severity-aware visibility).
     const delivery: DeliveryResult[] = (
       await Promise.all(
         allMembers.map(async (m) => {
@@ -359,7 +477,6 @@ export async function POST(req: NextRequest) {
       )
     ).filter((d): d is DeliveryResult => d !== null);
 
-    // 2. Emergency SMS fan-out (critical only, to all members with a phone).
     let smsDelivery: SmsResult[] = [];
     if (criticalFlags.length > 0) {
       const smsBody = buildSmsBody(patientRef, criticalFlags);
@@ -381,7 +498,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Persist to care_circle_alerts (best-effort).
     const { alerts, persistError } = await persistAlerts({
       patientId,
       flags,
