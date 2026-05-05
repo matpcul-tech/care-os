@@ -48,26 +48,53 @@ export function loadSession(): CCSession | null {
 }
 
 export async function refreshSession(s: CCSession): Promise<CCSession | null> {
-  const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-    method: 'POST',
-    headers: { apikey: ANON_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: s.refresh_token }),
-  });
-  if (!r.ok) return null;
-  const data = (await r.json()) as { access_token: string; refresh_token: string; expires_at: number };
-  const updated: CCSession = {
-    ...s,
-    access_token: data.access_token,
-    refresh_token: data.refresh_token,
-    expires_at: data.expires_at,
-  };
-  window.localStorage.setItem('cc-session', JSON.stringify(updated));
-  return updated;
+  try {
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { apikey: ANON_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: s.refresh_token }),
+    });
+    if (!r.ok) return null;
+    const data = (await r.json()) as { access_token: string; refresh_token: string; expires_at: number };
+    const updated: CCSession = {
+      ...s,
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: data.expires_at,
+    };
+    window.localStorage.setItem('cc-session', JSON.stringify(updated));
+    return updated;
+  } catch {
+    return null;
+  }
 }
 
+/**
+ * Resolve a usable session for a page-load gate.
+ *
+ * Behavior is intentionally LENIENT: the page-load gate must never log a
+ * pilot user out because of a transient refresh failure. Token refresh is
+ * attempted opportunistically when the access token is near or past
+ * expiry, but if the refresh call fails for any reason (network, used
+ * refresh token, CORS hiccup) we still return the existing session so
+ * the dashboard renders. Real auth errors surface on individual data
+ * calls as 401s, where the UI can prompt for re-login without nuking
+ * the entire session on every page refresh.
+ *
+ * Returns null only when there is no session in localStorage at all.
+ */
 export async function ensureValidSession(s: CCSession): Promise<CCSession | null> {
-  if (s.expires_at - 60 > Math.floor(Date.now() / 1000)) return s;
-  return refreshSession(s);
+  const nowSec = Math.floor(Date.now() / 1000);
+  // Plenty of headroom: if access token is still valid for > 60s, use it.
+  if (s.expires_at - 60 > nowSec) return s;
+  // Try to refresh. If it works, return the new session.
+  const refreshed = await refreshSession(s);
+  if (refreshed) return refreshed;
+  // Refresh failed. Keep the existing session anyway so the user stays
+  // signed in for this page load. Individual data calls will 401 if the
+  // access token is genuinely expired; the UI handles that case without
+  // bouncing the user out of the dashboard.
+  return s;
 }
 
 export async function sbAuthed(token: string, path: string): Promise<Response> {
