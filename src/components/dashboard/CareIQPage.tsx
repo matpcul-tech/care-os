@@ -9,9 +9,9 @@ import {
 import { T, PAGE_PAD, SECTION_LABEL, CARD_BG, CARD_BORDER } from './ui';
 
 const CAREIQ_URL =
-  process.env.NEXT_PUBLIC_CAREIQ_URL || 'https://iq-sable.vercel.app';
+  process.env.NEXT_PUBLIC_CAREIQ_URL || 'https://care-iq-sable.vercel.app';
 
-interface FamilyVitals {
+interface ShieldVitals {
   patient_id: string;
   bp_systolic: number | null;
   bp_diastolic: number | null;
@@ -21,6 +21,8 @@ interface FamilyVitals {
   spo2: number | null;
   risk_score: number;
   updated_at: string | null;
+  decrypted_at: string;
+  shield_version: string;
 }
 
 function bpStatus(sys: number | null, dia: number | null): 'ok' | 'warn' | 'alert' {
@@ -57,11 +59,22 @@ function spo2Status(v: number | null): 'ok' | 'warn' | 'alert' {
 const statusColor = (s: 'ok' | 'warn' | 'alert') =>
   s === 'alert' ? '#e8526e' : s === 'warn' ? '#d4a843' : '#00d4b8';
 
+function shieldTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
+
 const RING_R = 30;
 const RING_C = 2 * Math.PI * RING_R;
 
 export default function CareIQPage({ session }: { session: CCSession }) {
-  const [vitals, setVitals] = useState<FamilyVitals | null>(null);
+  const [vitals, setVitals] = useState<ShieldVitals | null>(null);
   const [vitalsErr, setVitalsErr] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[] | null>(null);
   const [alertsErr, setAlertsErr] = useState<string | null>(null);
@@ -70,16 +83,16 @@ export default function CareIQPage({ session }: { session: CCSession }) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`${CAREIQ_URL}/api/family/vitals`, {
+        const r = await fetch(`${CAREIQ_URL}/api/shield/decrypt`, {
           headers: { Authorization: `Bearer ${session.access_token}` },
           cache: 'no-store',
         });
-        const data = (await r.json().catch(() => ({}))) as Partial<FamilyVitals> & { error?: string };
+        const data = (await r.json().catch(() => ({}))) as Partial<ShieldVitals> & { error?: string };
         if (!r.ok) {
           if (!cancelled) setVitalsErr(data.error || `vitals ${r.status}`);
           return;
         }
-        if (!cancelled) setVitals(data as FamilyVitals);
+        if (!cancelled) setVitals(data as ShieldVitals);
       } catch (e) {
         if (!cancelled) setVitalsErr((e as Error).message);
       }
@@ -161,6 +174,8 @@ export default function CareIQPage({ session }: { session: CCSession }) {
       vitals.ldl != null ||
       vitals.hr != null ||
       vitals.spo2 != null);
+
+  const decryptedHHMM = vitals ? shieldTime(vitals.decrypted_at) : '';
 
   return (
     <div style={PAGE_PAD}>
@@ -248,7 +263,7 @@ export default function CareIQPage({ session }: { session: CCSession }) {
                 border: `1px solid ${statusColor(v.status)}30`,
                 borderRadius: 12,
                 padding: '11px 13px',
-                minWidth: 92,
+                minWidth: 96,
               }}
             >
               <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf', textTransform: 'uppercase', letterSpacing: '.12em', marginBottom: 4 }}>
@@ -258,6 +273,26 @@ export default function CareIQPage({ session }: { session: CCSession }) {
                 {v.val}
               </div>
               <div style={{ fontSize: 9, color: '#7a9bbf', marginTop: 2 }}>{v.unit}</div>
+              <div
+                style={{
+                  marginTop: 6,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  fontFamily: T,
+                  fontSize: 7.5,
+                  padding: '2px 5px',
+                  borderRadius: 5,
+                  background: 'rgba(0,212,184,.12)',
+                  color: '#00d4b8',
+                  border: '1px solid rgba(0,212,184,.28)',
+                  letterSpacing: '.08em',
+                  textTransform: 'uppercase',
+                  whiteSpace: 'nowrap',
+                }}
+                title={`Decrypted ${vitals ? new Date(vitals.decrypted_at).toLocaleString() : ''}`}
+              >
+                Shield {decryptedHHMM}
+              </div>
             </div>
           ))}
         </div>

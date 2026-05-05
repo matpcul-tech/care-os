@@ -7,7 +7,7 @@ import { T, O, PAGE_PAD, SECTION_LABEL, CARD_BG, CARD_BORDER } from './ui';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const CAREIQ_URL =
-  process.env.NEXT_PUBLIC_CAREIQ_URL || 'https://iq-sable.vercel.app';
+  process.env.NEXT_PUBLIC_CAREIQ_URL || 'https://care-iq-sable.vercel.app';
 
 type Severity = 'critical' | 'informational';
 
@@ -42,7 +42,7 @@ interface AlertRow {
   delivery_count: number;
 }
 
-interface FamilyVitals {
+interface ShieldVitals {
   patient_id: string;
   bp_systolic: number | null;
   bp_diastolic: number | null;
@@ -52,6 +52,8 @@ interface FamilyVitals {
   spo2: number | null;
   risk_score: number;
   updated_at: string | null;
+  decrypted_at: string;
+  shield_version: string;
 }
 
 function fmtTime(iso: string) {
@@ -65,6 +67,17 @@ function fmtTime(iso: string) {
     });
   } catch {
     return iso;
+  }
+}
+
+function shieldTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
   }
 }
 
@@ -154,7 +167,7 @@ export default function FamilyPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [myRow, setMyRow] = useState<CareCircleRow | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
-  const [vitals, setVitals] = useState<FamilyVitals | null>(null);
+  const [vitals, setVitals] = useState<ShieldVitals | null>(null);
   const [vitalsErr, setVitalsErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -207,20 +220,21 @@ export default function FamilyPage() {
         if (!cancelled) setLoading(false);
       }
 
-      // Fetch vitals from CareIQ /api/family/vitals. Independent of the
-      // alerts/care_circle reads so we don't block the rest of the page on
-      // an external request.
+      // Fetch decrypted vitals from CareIQ /api/shield/decrypt. The Bearer
+      // JWT tells the Shield endpoint we're a family member; the endpoint
+      // verifies, looks up care_circle, decrypts server-side, and returns
+      // the sanitized subset.
       try {
-        const r = await fetch(`${CAREIQ_URL}/api/family/vitals`, {
+        const r = await fetch(`${CAREIQ_URL}/api/shield/decrypt`, {
           headers: { Authorization: `Bearer ${valid.access_token}` },
           cache: 'no-store',
         });
-        const data = (await r.json().catch(() => ({}))) as Partial<FamilyVitals> & { error?: string };
+        const data = (await r.json().catch(() => ({}))) as Partial<ShieldVitals> & { error?: string };
         if (cancelled) return;
         if (!r.ok) {
           setVitalsErr(data.error || `vitals ${r.status}`);
         } else {
-          setVitals(data as FamilyVitals);
+          setVitals(data as ShieldVitals);
         }
       } catch (e) {
         if (!cancelled) setVitalsErr((e as Error).message);
@@ -335,6 +349,8 @@ export default function FamilyPage() {
       vitals.hr != null ||
       vitals.spo2 != null);
 
+  const decryptedHHMM = vitals ? shieldTime(vitals.decrypted_at) : '';
+
   return (
     <div style={PAGE_PAD}>
       {/* Patient header */}
@@ -414,7 +430,7 @@ export default function FamilyPage() {
         </div>
       </div>
 
-      {/* Vitals row from CareIQ */}
+      {/* Vitals row from CareIQ Shield */}
       <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Latest vitals</div>
       {anyVitalEntered ? (
         <>
@@ -437,7 +453,7 @@ export default function FamilyPage() {
                   border: `1px solid ${statusColor(v.status)}30`,
                   borderRadius: 12,
                   padding: '11px 13px',
-                  minWidth: 88,
+                  minWidth: 92,
                 }}
               >
                 <div
@@ -456,6 +472,26 @@ export default function FamilyPage() {
                   {v.val}
                 </div>
                 <div style={{ fontSize: 9, color: '#7a9bbf', marginTop: 2 }}>{v.unit}</div>
+                <div
+                  style={{
+                    marginTop: 6,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    fontFamily: T,
+                    fontSize: 7.5,
+                    padding: '2px 5px',
+                    borderRadius: 5,
+                    background: 'rgba(0,212,184,.12)',
+                    color: '#00d4b8',
+                    border: '1px solid rgba(0,212,184,.28)',
+                    letterSpacing: '.08em',
+                    textTransform: 'uppercase',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={`Decrypted ${vitals ? new Date(vitals.decrypted_at).toLocaleString() : ''}`}
+                >
+                  Shield {decryptedHHMM}
+                </div>
               </div>
             ))}
           </div>
