@@ -12,20 +12,45 @@ const CAREIQ_URL =
   process.env.NEXT_PUBLIC_CAREIQ_URL || 'https://care-iq-sable.vercel.app';
 
 // ---------------------------------------------------------------------------
-// Shield decrypt response shape. Mirrors /api/shield/decrypt on CareIQ.
+// Shield decrypt response shape (longevity biomarker panel + legacy fields).
 // ---------------------------------------------------------------------------
+type Source = 'lab' | 'wearable' | 'self_reported';
+type BiomarkerStatus = 'ok' | 'suboptimal' | 'outside_normal' | 'unknown';
+type Sex = 'male' | 'female' | 'unknown';
+
+interface BiomarkerResponse {
+  value: number | null;
+  unit: string;
+  precision: number;
+  date_collected: string | null;
+  source: Source | null;
+  normal_low: number | null;
+  normal_high: number | null;
+  optimal_low: number | null;
+  optimal_high: number | null;
+  bar_min: number;
+  bar_max: number;
+  status: BiomarkerStatus;
+  trend: 'improving' | 'stable' | 'declining' | null;
+}
+
+type CategoryKey =
+  | 'metabolic'
+  | 'cardiovascular'
+  | 'organ'
+  | 'blood'
+  | 'hormonal'
+  | 'longevity'
+  | 'cognitive';
+
+type CategoryGroup = Record<string, BiomarkerResponse>;
+type BiomarkerPanel = Record<CategoryKey, CategoryGroup>;
+
 interface ShieldPayload {
   patient_id: string;
   bp_systolic: number | null;
   bp_diastolic: number | null;
-  a1c: number | null;
-  ldl: number | null;
-  hdl: number | null;
-  total_cholesterol: number | null;
-  fasting_glucose: number | null;
-  triglycerides: number | null;
-  egfr: number | null;
-  crp: number | null;
+  // Legacy flat fields preserved by the endpoint for back-compat.
   hr: number | null;
   steps: number | null;
   spo2: number | null;
@@ -41,179 +66,32 @@ interface ShieldPayload {
   updated_at: string | null;
   decrypted_at: string;
   shield_version: string;
+  biomarkers: BiomarkerPanel;
+  sex: Sex;
 }
 
 // ---------------------------------------------------------------------------
-// Color tokens. Mirrors CareIQ Health tab palette so the two surfaces feel
-// identical even though the underlying numbers come through the Shield.
+// Visual tokens. Match CareIQ palette.
 // ---------------------------------------------------------------------------
 const OK = '#00d4b8';
 const WARN = '#d4a843';
 const ALERT = '#e8526e';
 const PURPLE = '#8060cc';
 const GREEN = '#4ade80';
+const MUTED = '#7a9bbf';
 
-type Status = 'ok' | 'warn' | 'alert' | 'none';
-const statusColor = (s: Status): string =>
-  s === 'alert' ? ALERT : s === 'warn' ? WARN : s === 'ok' ? OK : '#7a9bbf';
-
-// ---------------------------------------------------------------------------
-// Lab spec table. Each entry drives the range bar (zones) + status logic for
-// one panel value. Zones must be contiguous and cover [min, max].
-// ---------------------------------------------------------------------------
-interface LabZone {
-  from: number;
-  to: number;
-  status: Status;
-}
-interface LabSpec {
-  label: string;
-  unit: string;
-  min: number;
-  max: number;
-  zones: LabZone[];
-  precision: number;
+function statusColor(s: BiomarkerStatus): string {
+  if (s === 'ok') return OK;
+  if (s === 'suboptimal') return WARN;
+  if (s === 'outside_normal') return ALERT;
+  return MUTED;
 }
 
-const LAB_SPECS: Record<string, LabSpec> = {
-  a1c: {
-    label: 'A1C',
-    unit: '%',
-    min: 4,
-    max: 10,
-    precision: 1,
-    zones: [
-      { from: 4, to: 5.7, status: 'ok' },
-      { from: 5.7, to: 6.5, status: 'warn' },
-      { from: 6.5, to: 10, status: 'alert' },
-    ],
-  },
-  ldl: {
-    label: 'LDL',
-    unit: 'mg/dL',
-    min: 50,
-    max: 250,
-    precision: 0,
-    zones: [
-      { from: 50, to: 130, status: 'ok' },
-      { from: 130, to: 190, status: 'warn' },
-      { from: 190, to: 250, status: 'alert' },
-    ],
-  },
-  hdl: {
-    label: 'HDL',
-    unit: 'mg/dL',
-    min: 20,
-    max: 100,
-    precision: 0,
-    zones: [
-      { from: 20, to: 30, status: 'alert' },
-      { from: 30, to: 40, status: 'warn' },
-      { from: 40, to: 100, status: 'ok' },
-    ],
-  },
-  total_cholesterol: {
-    label: 'Total Cholesterol',
-    unit: 'mg/dL',
-    min: 100,
-    max: 320,
-    precision: 0,
-    zones: [
-      { from: 100, to: 200, status: 'ok' },
-      { from: 200, to: 240, status: 'warn' },
-      { from: 240, to: 320, status: 'alert' },
-    ],
-  },
-  fasting_glucose: {
-    label: 'Fasting Glucose',
-    unit: 'mg/dL',
-    min: 60,
-    max: 200,
-    precision: 0,
-    zones: [
-      { from: 60, to: 100, status: 'ok' },
-      { from: 100, to: 126, status: 'warn' },
-      { from: 126, to: 200, status: 'alert' },
-    ],
-  },
-  triglycerides: {
-    label: 'Triglycerides',
-    unit: 'mg/dL',
-    min: 50,
-    max: 400,
-    precision: 0,
-    zones: [
-      { from: 50, to: 150, status: 'ok' },
-      { from: 150, to: 200, status: 'warn' },
-      { from: 200, to: 400, status: 'alert' },
-    ],
-  },
-  egfr: {
-    label: 'eGFR',
-    unit: 'mL/min',
-    min: 0,
-    max: 120,
-    precision: 0,
-    zones: [
-      { from: 0, to: 60, status: 'alert' },
-      { from: 60, to: 90, status: 'warn' },
-      { from: 90, to: 120, status: 'ok' },
-    ],
-  },
-  crp: {
-    label: 'CRP',
-    unit: 'mg/L',
-    min: 0,
-    max: 10,
-    precision: 1,
-    zones: [
-      { from: 0, to: 1, status: 'ok' },
-      { from: 1, to: 3, status: 'warn' },
-      { from: 3, to: 10, status: 'alert' },
-    ],
-  },
-};
-
-function valueStatus(spec: LabSpec, value: number): Status {
-  for (const z of spec.zones) {
-    if (value >= z.from && value < z.to) return z.status;
-  }
-  // Past max: clamp to last zone status.
-  return spec.zones[spec.zones.length - 1].status;
-}
-
-// ---------------------------------------------------------------------------
-// Vitals chip status helpers (top vitals row).
-// ---------------------------------------------------------------------------
-function bpStatus(sys: number | null, dia: number | null): Status {
-  if (sys === null && dia === null) return 'none';
-  if ((sys ?? 0) >= 140 || (dia ?? 0) >= 90) return 'alert';
-  if ((sys ?? 0) >= 130 || (dia ?? 0) >= 80) return 'warn';
-  return 'ok';
-}
-function hrStatus(v: number | null): Status {
-  if (v === null) return 'none';
-  if (v < 50 || v > 100) return 'alert';
-  if (v < 55 || v > 95) return 'warn';
-  return 'ok';
-}
-function spo2Status(v: number | null): Status {
-  if (v === null) return 'none';
-  if (v < 90) return 'alert';
-  if (v < 95) return 'warn';
-  return 'ok';
-}
-function sleepStatus(v: number | null): Status {
-  if (v === null) return 'none';
-  if (v < 6 || v > 10) return 'alert';
-  if (v < 7 || v > 9) return 'warn';
-  return 'ok';
-}
-function stepsStatus(v: number | null): Status {
-  if (v === null) return 'none';
-  if (v < 4000) return 'alert';
-  if (v < 7000) return 'warn';
-  return 'ok';
+function statusLabel(s: BiomarkerStatus): string {
+  if (s === 'ok') return 'Optimal';
+  if (s === 'suboptimal') return 'Suboptimal';
+  if (s === 'outside_normal') return 'Outside normal';
+  return 'Not yet entered';
 }
 
 function shieldTime(iso: string): string {
@@ -232,7 +110,7 @@ function gradeColor(grade: string): string {
   if (grade === 'B') return GREEN;
   if (grade === 'C') return WARN;
   if (grade === 'D' || grade === 'F') return ALERT;
-  return '#7a9bbf';
+  return MUTED;
 }
 
 function riskColor(score: number): string {
@@ -241,8 +119,207 @@ function riskColor(score: number): string {
   return ALERT;
 }
 
+const CATEGORY_TITLES: Record<CategoryKey, string> = {
+  metabolic: 'Metabolic',
+  cardiovascular: 'Cardiovascular',
+  organ: 'Organ Function',
+  blood: 'Blood',
+  hormonal: 'Hormonal',
+  longevity: 'Longevity',
+  cognitive: 'Cognitive',
+};
+
+const CATEGORY_ORDER: CategoryKey[] = [
+  'metabolic',
+  'cardiovascular',
+  'organ',
+  'blood',
+  'hormonal',
+  'longevity',
+  'cognitive',
+];
+
+// Within each category we render in this preferred order. Keys not in the
+// list fall through alphabetically.
+const KEY_ORDER: Record<CategoryKey, string[]> = {
+  metabolic: ['fasting_glucose', 'fasting_insulin', 'homa_ir', 'a1c', 'uric_acid'],
+  cardiovascular: [
+    'ldl', 'hdl', 'total_cholesterol', 'triglycerides',
+    'apob', 'lpa', 'hs_crp', 'homocysteine', 'vldl',
+  ],
+  organ: ['egfr', 'creatinine', 'bun', 'alt', 'ast', 'albumin', 'bilirubin'],
+  blood: ['wbc', 'rbc', 'hemoglobin', 'hematocrit', 'platelets', 'ferritin', 'vitamin_b12'],
+  hormonal: [
+    'testosterone_total', 'testosterone_free', 'dhea_s', 'cortisol_am',
+    'igf1', 'tsh', 'vitamin_d', 'omega3_index',
+  ],
+  longevity: [
+    'biological_age_estimate', 'grip_strength', 'vo2_max',
+    'resting_hr', 'hrv', 'sleep_score', 'stress_score',
+  ],
+  cognitive: ['memory_score', 'processing_speed', 'executive_function'],
+};
+
+const LABELS: Record<string, string> = {
+  fasting_glucose: 'Fasting Glucose',
+  fasting_insulin: 'Fasting Insulin',
+  homa_ir: 'HOMA-IR',
+  a1c: 'A1C',
+  uric_acid: 'Uric Acid',
+  ldl: 'LDL Cholesterol',
+  hdl: 'HDL Cholesterol',
+  total_cholesterol: 'Total Cholesterol',
+  triglycerides: 'Triglycerides',
+  apob: 'ApoB',
+  lpa: 'Lp(a)',
+  hs_crp: 'hs-CRP',
+  homocysteine: 'Homocysteine',
+  vldl: 'VLDL',
+  egfr: 'eGFR',
+  creatinine: 'Creatinine',
+  bun: 'BUN',
+  alt: 'ALT',
+  ast: 'AST',
+  albumin: 'Albumin',
+  bilirubin: 'Bilirubin',
+  wbc: 'WBC',
+  rbc: 'RBC',
+  hemoglobin: 'Hemoglobin',
+  hematocrit: 'Hematocrit',
+  platelets: 'Platelets',
+  ferritin: 'Ferritin',
+  vitamin_b12: 'Vitamin B12',
+  testosterone_total: 'Testosterone (Total)',
+  testosterone_free: 'Testosterone (Free)',
+  dhea_s: 'DHEA-S',
+  cortisol_am: 'Cortisol (AM)',
+  igf1: 'IGF-1',
+  tsh: 'TSH',
+  vitamin_d: 'Vitamin D',
+  omega3_index: 'Omega-3 Index',
+  biological_age_estimate: 'Biological Age',
+  grip_strength: 'Grip Strength',
+  vo2_max: 'VO2 Max',
+  resting_hr: 'Resting HR',
+  hrv: 'HRV',
+  sleep_score: 'Sleep Score',
+  stress_score: 'Stress Score',
+  memory_score: 'Memory',
+  processing_speed: 'Processing Speed',
+  executive_function: 'Executive Function',
+};
+
 // ---------------------------------------------------------------------------
-// Visual primitives.
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatValue(v: number | null, precision: number): string {
+  if (v === null) return 'Not yet entered';
+  if (precision === 0) return String(Math.round(v));
+  return v.toFixed(precision);
+}
+
+function zoneColorAt(
+  mid: number,
+  th: { normal_low: number | null; normal_high: number | null; optimal_low: number | null; optimal_high: number | null },
+): 'red' | 'yellow' | 'green' | 'gray' {
+  if (
+    th.normal_low === null && th.normal_high === null &&
+    th.optimal_low === null && th.optimal_high === null
+  ) {
+    return 'gray';
+  }
+  const outNormal =
+    (th.normal_low !== null && mid < th.normal_low) ||
+    (th.normal_high !== null && mid > th.normal_high);
+  if (outNormal) return 'red';
+
+  const hasOpt = th.optimal_low !== null || th.optimal_high !== null;
+  if (!hasOpt) return 'green';
+
+  const lowOk = th.optimal_low === null || mid >= th.optimal_low;
+  const highOk = th.optimal_high === null || mid <= th.optimal_high;
+  if (lowOk && highOk) return 'green';
+  return 'yellow';
+}
+
+function zoneCss(c: 'red' | 'yellow' | 'green' | 'gray'): string {
+  if (c === 'red') return 'rgba(232,82,110,.32)';
+  if (c === 'yellow') return 'rgba(212,168,67,.32)';
+  if (c === 'green') return 'rgba(0,212,184,.32)';
+  return 'rgba(255,255,255,.06)';
+}
+
+interface BarSegment {
+  fromPct: number;
+  toPct: number;
+  color: 'red' | 'yellow' | 'green' | 'gray';
+}
+
+function computeBarSegments(b: BiomarkerResponse): BarSegment[] {
+  const min = b.bar_min;
+  const max = b.bar_max;
+  if (max <= min) return [];
+
+  // Collect breakpoints inside (min, max).
+  const raw = new Set<number>([min, max]);
+  for (const v of [b.normal_low, b.normal_high, b.optimal_low, b.optimal_high]) {
+    if (v !== null && v > min && v < max) raw.add(v);
+  }
+  const sorted = [...raw].sort((x, y) => x - y);
+
+  const pct = (n: number) => ((n - min) / (max - min)) * 100;
+  const segments: BarSegment[] = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const from = sorted[i];
+    const to = sorted[i + 1];
+    const mid = (from + to) / 2;
+    const color = zoneColorAt(mid, b);
+    segments.push({ fromPct: pct(from), toPct: pct(to), color });
+  }
+  // Merge adjacent segments of the same color for cleaner DOM.
+  const merged: BarSegment[] = [];
+  for (const seg of segments) {
+    const last = merged[merged.length - 1];
+    if (last && last.color === seg.color && Math.abs(last.toPct - seg.fromPct) < 0.01) {
+      last.toPct = seg.toPct;
+    } else {
+      merged.push({ ...seg });
+    }
+  }
+  return merged;
+}
+
+function markerPct(b: BiomarkerResponse): number | null {
+  if (b.value === null) return null;
+  const min = b.bar_min;
+  const max = b.bar_max;
+  if (max <= min) return null;
+  const clamped = Math.max(min, Math.min(max, b.value));
+  return ((clamped - min) / (max - min)) * 100;
+}
+
+function rangeSummary(b: BiomarkerResponse): string {
+  const ol = b.optimal_low;
+  const oh = b.optimal_high;
+  const nl = b.normal_low;
+  const nh = b.normal_high;
+  const fmt = (n: number | null) => (n === null ? null : (b.precision === 0 ? String(Math.round(n)) : n.toFixed(b.precision)));
+  const optParts: string[] = [];
+  if (ol !== null && oh !== null) optParts.push(`${fmt(ol)} to ${fmt(oh)}`);
+  else if (ol !== null) optParts.push(`above ${fmt(ol)}`);
+  else if (oh !== null) optParts.push(`below ${fmt(oh)}`);
+  const normParts: string[] = [];
+  if (nl !== null && nh !== null) normParts.push(`${fmt(nl)} to ${fmt(nh)}`);
+  else if (nl !== null) normParts.push(`above ${fmt(nl)}`);
+  else if (nh !== null) normParts.push(`below ${fmt(nh)}`);
+  const optStr = optParts.length > 0 ? `Optimal: ${optParts[0]} ${b.unit}` : '';
+  const normStr = normParts.length > 0 ? `Normal: ${normParts[0]} ${b.unit}` : '';
+  return [optStr, normStr].filter(Boolean).join(' · ');
+}
+
+// ---------------------------------------------------------------------------
+// Visual primitives
 // ---------------------------------------------------------------------------
 
 function ShieldBadge({ decryptedAt }: { decryptedAt: string }) {
@@ -270,16 +347,9 @@ function ShieldBadge({ decryptedAt }: { decryptedAt: string }) {
   );
 }
 
-function RangeBar({
-  spec,
-  value,
-}: {
-  spec: LabSpec;
-  value: number;
-}) {
-  const pct = (n: number) =>
-    Math.max(0, Math.min(100, ((n - spec.min) / (spec.max - spec.min)) * 100));
-  const markerPct = pct(value);
+function RangeBar({ b }: { b: BiomarkerResponse }) {
+  const segments = computeBarSegments(b);
+  const m = markerPct(b);
   return (
     <div
       style={{
@@ -289,6 +359,7 @@ function RangeBar({
         overflow: 'visible',
         background: 'rgba(255,255,255,.04)',
       }}
+      aria-hidden
     >
       <div
         style={{
@@ -299,54 +370,73 @@ function RangeBar({
           display: 'flex',
         }}
       >
-        {spec.zones.map((z, i) => {
-          const w = pct(z.to) - pct(z.from);
-          return (
-            <div
-              key={i}
-              style={{
-                width: `${w}%`,
-                background:
-                  z.status === 'ok'
-                    ? 'rgba(0,212,184,.35)'
-                    : z.status === 'warn'
-                    ? 'rgba(212,168,67,.35)'
-                    : 'rgba(232,82,110,.35)',
-              }}
-            />
-          );
-        })}
+        {segments.map((s, i) => (
+          <div
+            key={i}
+            style={{
+              width: `${s.toPct - s.fromPct}%`,
+              background: zoneCss(s.color),
+            }}
+          />
+        ))}
       </div>
-      {/* Marker line at the patient's value */}
-      <div
-        style={{
-          position: 'absolute',
-          left: `${markerPct}%`,
-          top: -3,
-          bottom: -3,
-          width: 2,
-          background: '#eef2f8',
-          borderRadius: 1,
-          transform: 'translateX(-1px)',
-          boxShadow: '0 0 6px rgba(238,242,248,.6)',
-        }}
-      />
+      {m !== null && (
+        <div
+          style={{
+            position: 'absolute',
+            left: `${m}%`,
+            top: -3,
+            bottom: -3,
+            width: 2,
+            background: '#eef2f8',
+            borderRadius: 1,
+            transform: 'translateX(-1px)',
+            boxShadow: '0 0 6px rgba(238,242,248,.6)',
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function LabRow({
-  specKey,
-  value,
+function StatusPill({ status }: { status: BiomarkerStatus }) {
+  const c = statusColor(status);
+  const label = statusLabel(status);
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        fontFamily: T,
+        fontSize: 8,
+        padding: '2px 7px',
+        borderRadius: 6,
+        background: `${c}1f`,
+        color: c,
+        border: `1px solid ${c}55`,
+        textTransform: 'uppercase',
+        letterSpacing: '.1em',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function BiomarkerRow({
+  bkey,
+  b,
   decryptedAt,
 }: {
-  specKey: keyof typeof LAB_SPECS;
-  value: number;
+  bkey: string;
+  b: BiomarkerResponse;
   decryptedAt: string;
 }) {
-  const spec = LAB_SPECS[specKey];
-  const status = valueStatus(spec, value);
-  const valStr = value.toFixed(spec.precision);
+  const label = LABELS[bkey] || bkey;
+  const valStr = formatValue(b.value, b.precision);
+  const valColor = b.value === null ? MUTED : statusColor(b.status);
+  const summary = rangeSummary(b);
   return (
     <div
       style={{
@@ -362,158 +452,112 @@ function LabRow({
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'baseline',
-          marginBottom: 8,
+          gap: 8,
+          marginBottom: 6,
         }}
       >
         <div
           style={{
             fontFamily: T,
             fontSize: 9,
-            color: '#7a9bbf',
+            color: MUTED,
             textTransform: 'uppercase',
             letterSpacing: '.14em',
           }}
         >
-          {spec.label}
+          {label}
         </div>
         <div
           style={{
             fontFamily: T,
-            fontSize: 17,
+            fontSize: 16,
             fontWeight: 600,
-            color: statusColor(status),
+            color: valColor,
+            whiteSpace: 'nowrap',
           }}
         >
-          {valStr}
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 400,
-              color: '#7a9bbf',
-              marginLeft: 4,
-            }}
-          >
-            {spec.unit}
-          </span>
+          {b.value === null ? (
+            <span style={{ fontSize: 11, fontWeight: 400, color: MUTED }}>Not yet entered</span>
+          ) : (
+            <>
+              {valStr}
+              {b.unit && (
+                <span style={{ fontSize: 10, fontWeight: 400, color: MUTED, marginLeft: 4 }}>
+                  {b.unit}
+                </span>
+              )}
+            </>
+          )}
         </div>
       </div>
-      <RangeBar spec={spec} value={value} />
-      <div style={{ marginTop: 10 }}>
-        <ShieldBadge decryptedAt={decryptedAt} />
+      <RangeBar b={b} />
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 8,
+          marginTop: 8,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div
+          style={{
+            fontFamily: T,
+            fontSize: 9,
+            color: MUTED,
+            lineHeight: 1.4,
+            flex: 1,
+            minWidth: 0,
+          }}
+        >
+          {summary || ' '}
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+          <StatusPill status={b.status} />
+          <ShieldBadge decryptedAt={decryptedAt} />
+        </div>
       </div>
     </div>
   );
 }
 
-function WearableTile({
-  label,
-  value,
-  unit,
-  status,
+function CategorySection({
+  category,
+  group,
   decryptedAt,
 }: {
-  label: string;
-  value: string;
-  unit: string;
-  status: Status;
+  category: CategoryKey;
+  group: CategoryGroup;
   decryptedAt: string;
 }) {
+  const order = KEY_ORDER[category];
+  const rendered = new Set<string>();
+  const rows: { key: string; b: BiomarkerResponse }[] = [];
+  for (const k of order) {
+    if (group[k]) {
+      rows.push({ key: k, b: group[k] });
+      rendered.add(k);
+    }
+  }
+  for (const k of Object.keys(group).sort()) {
+    if (!rendered.has(k)) rows.push({ key: k, b: group[k] });
+  }
+  if (rows.length === 0) return null;
   return (
-    <div
-      style={{
-        background: CARD_BG,
-        border: `1px solid ${statusColor(status)}30`,
-        borderRadius: 12,
-        padding: 12,
-      }}
-    >
-      <div
-        style={{
-          fontFamily: T,
-          fontSize: 9,
-          color: '#7a9bbf',
-          textTransform: 'uppercase',
-          letterSpacing: '.12em',
-          marginBottom: 6,
-        }}
-      >
-        {label}
+    <>
+      <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>
+        {CATEGORY_TITLES[category]}
       </div>
-      <div
-        style={{
-          fontFamily: T,
-          fontSize: 19,
-          fontWeight: 600,
-          color: statusColor(status),
-          lineHeight: 1.1,
-        }}
-      >
-        {value}
-      </div>
-      <div style={{ fontSize: 9, color: '#7a9bbf', marginTop: 2 }}>{unit}</div>
-      <div style={{ marginTop: 8 }}>
-        <ShieldBadge decryptedAt={decryptedAt} />
-      </div>
-    </div>
-  );
-}
-
-function VitalChip({
-  label,
-  val,
-  unit,
-  status,
-  decryptedAt,
-}: {
-  label: string;
-  val: string;
-  unit: string;
-  status: Status;
-  decryptedAt: string;
-}) {
-  return (
-    <div
-      style={{
-        flexShrink: 0,
-        background: CARD_BG,
-        border: `1px solid ${statusColor(status)}30`,
-        borderRadius: 12,
-        padding: '11px 13px',
-        minWidth: 96,
-      }}
-    >
-      <div
-        style={{
-          fontFamily: T,
-          fontSize: 9,
-          color: '#7a9bbf',
-          textTransform: 'uppercase',
-          letterSpacing: '.12em',
-          marginBottom: 4,
-        }}
-      >
-        {label}
-      </div>
-      <div
-        style={{
-          fontFamily: T,
-          fontSize: 17,
-          fontWeight: 600,
-          color: statusColor(status),
-        }}
-      >
-        {val}
-      </div>
-      <div style={{ fontSize: 9, color: '#7a9bbf', marginTop: 2 }}>{unit}</div>
-      <div style={{ marginTop: 6 }}>
-        <ShieldBadge decryptedAt={decryptedAt} />
-      </div>
-    </div>
+      {rows.map(({ key, b }) => (
+        <BiomarkerRow key={key} bkey={key} b={b} decryptedAt={decryptedAt} />
+      ))}
+    </>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Risk ring: matches CareIQ's gradient (teal -> purple) and animated stroke.
+// Risk ring
 // ---------------------------------------------------------------------------
 const RING_R = 37;
 const RING_C = 2 * Math.PI * RING_R;
@@ -568,7 +612,7 @@ function RiskRing({ score, loaded }: { score: number; loaded: boolean }) {
         <div
           style={{
             fontSize: 7,
-            color: '#7a9bbf',
+            color: MUTED,
             textTransform: 'uppercase',
             letterSpacing: '.18em',
             marginTop: 3,
@@ -636,120 +680,11 @@ export default function CareIQPage({ session }: { session: CCSession }) {
   const loaded = payload !== null;
   const score = payload?.risk_score ?? 0;
   const decryptedAt = payload?.decrypted_at ?? new Date().toISOString();
+  const sex = payload?.sex ?? 'unknown';
 
-  // Top vitals chips. We only render a chip when a real value is present.
-  const vitalChips: { label: string; val: string; unit: string; status: Status }[] = [];
-  if (payload) {
-    if (payload.bp_systolic !== null && payload.bp_diastolic !== null) {
-      vitalChips.push({
-        label: 'BP',
-        val: `${payload.bp_systolic}/${payload.bp_diastolic}`,
-        unit: 'mmHg',
-        status: bpStatus(payload.bp_systolic, payload.bp_diastolic),
-      });
-    }
-    if (payload.a1c !== null) {
-      vitalChips.push({
-        label: 'A1C',
-        val: payload.a1c.toFixed(1),
-        unit: '%',
-        status: valueStatus(LAB_SPECS.a1c, payload.a1c),
-      });
-    }
-    if (payload.ldl !== null) {
-      vitalChips.push({
-        label: 'LDL',
-        val: String(Math.round(payload.ldl)),
-        unit: 'mg/dL',
-        status: valueStatus(LAB_SPECS.ldl, payload.ldl),
-      });
-    }
-    if (payload.hr !== null) {
-      vitalChips.push({
-        label: 'HR',
-        val: String(payload.hr),
-        unit: 'bpm',
-        status: hrStatus(payload.hr),
-      });
-    }
-    if (payload.spo2 !== null) {
-      vitalChips.push({
-        label: 'SpO2',
-        val: String(payload.spo2),
-        unit: '%',
-        status: spo2Status(payload.spo2),
-      });
-    }
-  }
-
-  // Full blood panel rows in the order CareIQ presents them.
-  const bloodPanelRows: { specKey: keyof typeof LAB_SPECS; value: number }[] = [];
-  if (payload) {
-    if (payload.ldl !== null) bloodPanelRows.push({ specKey: 'ldl', value: payload.ldl });
-    if (payload.total_cholesterol !== null)
-      bloodPanelRows.push({ specKey: 'total_cholesterol', value: payload.total_cholesterol });
-    if (payload.hdl !== null) bloodPanelRows.push({ specKey: 'hdl', value: payload.hdl });
-    if (payload.a1c !== null) bloodPanelRows.push({ specKey: 'a1c', value: payload.a1c });
-    if (payload.fasting_glucose !== null)
-      bloodPanelRows.push({ specKey: 'fasting_glucose', value: payload.fasting_glucose });
-    if (payload.egfr !== null) bloodPanelRows.push({ specKey: 'egfr', value: payload.egfr });
-    if (payload.crp !== null) bloodPanelRows.push({ specKey: 'crp', value: payload.crp });
-    if (payload.triglycerides !== null)
-      bloodPanelRows.push({ specKey: 'triglycerides', value: payload.triglycerides });
-  }
-
-  // Wearable tiles, only if a real value is present.
-  const wearableTiles: { label: string; value: string; unit: string; status: Status }[] = [];
-  if (payload) {
-    if (payload.hr !== null) {
-      wearableTiles.push({
-        label: 'Heart Rate',
-        value: String(payload.hr),
-        unit: 'bpm',
-        status: hrStatus(payload.hr),
-      });
-    }
-    if (payload.steps !== null) {
-      wearableTiles.push({
-        label: 'Steps',
-        value: payload.steps.toLocaleString(),
-        unit: 'today',
-        status: stepsStatus(payload.steps),
-      });
-    }
-    if (payload.spo2 !== null) {
-      wearableTiles.push({
-        label: 'SpO2',
-        value: String(payload.spo2),
-        unit: '%',
-        status: spo2Status(payload.spo2),
-      });
-    }
-    if (payload.sleep_hours !== null) {
-      wearableTiles.push({
-        label: 'Sleep',
-        value: payload.sleep_hours.toFixed(1),
-        unit: 'hours',
-        status: sleepStatus(payload.sleep_hours),
-      });
-    }
-    if (payload.hrv !== null) {
-      wearableTiles.push({
-        label: 'HRV',
-        value: String(Math.round(payload.hrv)),
-        unit: 'ms',
-        status: 'ok',
-      });
-    }
-    if (payload.active_calories !== null) {
-      wearableTiles.push({
-        label: 'Active Calories',
-        value: String(Math.round(payload.active_calories)),
-        unit: 'kcal',
-        status: 'ok',
-      });
-    }
-  }
+  // Quick-glance vitals chip row for BP only (other vitals now live inside
+  // the categorized panel below).
+  const showBpChip = payload && (payload.bp_systolic !== null || payload.bp_diastolic !== null);
 
   return (
     <div style={PAGE_PAD}>
@@ -779,7 +714,7 @@ export default function CareIQPage({ session }: { session: CCSession }) {
           >
             {loaded ? payload!.risk_label : 'Loading vitals...'}
           </div>
-          <div style={{ fontSize: 11, color: '#7a9bbf', lineHeight: 1.5, marginBottom: 6 }}>
+          <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.5, marginBottom: 6 }}>
             {vitalsErr
               ? `Vitals not available: ${vitalsErr}`
               : payload?.updated_at
@@ -828,117 +763,106 @@ export default function CareIQPage({ session }: { session: CCSession }) {
               style={{
                 fontFamily: T,
                 fontSize: 9,
-                color: '#7a9bbf',
+                color: MUTED,
                 textTransform: 'uppercase',
                 letterSpacing: '.14em',
                 marginBottom: 4,
               }}
             >
-              Panel grade
+              Longevity panel grade
             </div>
             <div style={{ display: 'flex', gap: 14, alignItems: 'baseline', flexWrap: 'wrap' }}>
               <div>
-                <span
-                  style={{
-                    fontFamily: T,
-                    fontSize: 17,
-                    fontWeight: 600,
-                    color: ALERT,
-                  }}
-                >
+                <span style={{ fontFamily: T, fontSize: 17, fontWeight: 600, color: ALERT }}>
                   {payload!.panel_flagged}
                 </span>{' '}
-                <span style={{ fontSize: 10, color: '#7a9bbf' }}>flagged</span>
+                <span style={{ fontSize: 10, color: MUTED }}>flagged</span>
               </div>
               <div>
-                <span
-                  style={{
-                    fontFamily: T,
-                    fontSize: 17,
-                    fontWeight: 600,
-                    color: OK,
-                  }}
-                >
+                <span style={{ fontFamily: T, fontSize: 17, fontWeight: 600, color: OK }}>
                   {payload!.panel_in_range}
                 </span>{' '}
-                <span style={{ fontSize: 10, color: '#7a9bbf' }}>in range</span>
+                <span style={{ fontSize: 10, color: MUTED }}>in optimal</span>
               </div>
+              {sex !== 'unknown' && (
+                <div>
+                  <span style={{ fontFamily: T, fontSize: 9, color: MUTED, textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                    Sex: {sex}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Vitals chip row */}
-      {vitalChips.length > 0 && (
+      {/* BP quick-glance chip (vitals not in biomarker panel) */}
+      {showBpChip && (
         <>
-          <div style={SECTION_LABEL}>Vitals</div>
+          <div style={SECTION_LABEL}>Blood Pressure</div>
           <div
             style={{
-              display: 'flex',
-              gap: 8,
-              overflowX: 'auto',
-              scrollbarWidth: 'none',
+              flexShrink: 0,
+              background: CARD_BG,
+              border: `1px solid ${OK}30`,
+              borderRadius: 12,
+              padding: '11px 13px',
               marginBottom: 16,
-              paddingBottom: 4,
+              maxWidth: 200,
             }}
           >
-            {vitalChips.map((v) => (
-              <VitalChip key={v.label} {...v} decryptedAt={decryptedAt} />
-            ))}
+            <div
+              style={{
+                fontFamily: T,
+                fontSize: 9,
+                color: MUTED,
+                textTransform: 'uppercase',
+                letterSpacing: '.12em',
+                marginBottom: 4,
+              }}
+            >
+              BP
+            </div>
+            <div style={{ fontFamily: T, fontSize: 17, fontWeight: 600, color: '#eef2f8' }}>
+              {payload!.bp_systolic !== null && payload!.bp_diastolic !== null
+                ? `${payload!.bp_systolic}/${payload!.bp_diastolic}`
+                : 'Not yet entered'}
+            </div>
+            <div style={{ fontSize: 9, color: MUTED, marginTop: 2 }}>mmHg</div>
+            <div style={{ marginTop: 6 }}>
+              <ShieldBadge decryptedAt={decryptedAt} />
+            </div>
           </div>
         </>
       )}
 
-      {/* Full blood panel section */}
-      {bloodPanelRows.length > 0 && (
-        <>
-          <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Full Blood Panel</div>
-          {bloodPanelRows.map((r) => (
-            <LabRow
-              key={r.specKey}
-              specKey={r.specKey}
-              value={r.value}
-              decryptedAt={decryptedAt}
-            />
-          ))}
-        </>
-      )}
+      {/* Longevity Biomarker Panel grouped by category */}
+      {loaded &&
+        CATEGORY_ORDER.map((cat) => (
+          <CategorySection
+            key={cat}
+            category={cat}
+            group={payload!.biomarkers[cat] || {}}
+            decryptedAt={decryptedAt}
+          />
+        ))}
 
-      {/* Wearable metrics section */}
-      {wearableTiles.length > 0 && (
-        <>
-          <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Wearable Metrics</div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(2, 1fr)',
-              gap: 8,
-              marginBottom: 16,
-            }}
-          >
-            {wearableTiles.map((t) => (
-              <WearableTile key={t.label} {...t} decryptedAt={decryptedAt} />
-            ))}
-          </div>
-        </>
-      )}
-
-      {/* No data message */}
-      {loaded && bloodPanelRows.length === 0 && wearableTiles.length === 0 && !vitalsErr && (
+      {!loaded && !vitalsErr && (
         <div
           style={{
             background: CARD_BG,
             border: CARD_BORDER,
             borderRadius: 14,
             padding: 18,
+            marginTop: 8,
             marginBottom: 16,
             fontSize: 11,
-            color: '#7a9bbf',
+            color: MUTED,
             textAlign: 'center',
             lineHeight: 1.6,
           }}
         >
-          No lab values or wearable data on file. Numbers appear here after the patient enters labs in CareIQ or syncs a wearable.
+          Loading biomarker panel from CareIQ Shield...
         </div>
       )}
 
@@ -960,7 +884,7 @@ export default function CareIQPage({ session }: { session: CCSession }) {
         </div>
       )}
       {alerts === null && !alertsErr && (
-        <div style={{ fontSize: 11, color: '#7a9bbf', textAlign: 'center', padding: 18 }}>
+        <div style={{ fontSize: 11, color: MUTED, textAlign: 'center', padding: 18 }}>
           Loading alerts...
         </div>
       )}
@@ -1023,7 +947,7 @@ export default function CareIQPage({ session }: { session: CCSession }) {
                 {a.severity}
               </span>
             </div>
-            <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf', marginBottom: 4 }}>
+            <div style={{ fontFamily: T, fontSize: 9, color: MUTED, marginBottom: 4 }}>
               {fmtTime(a.fired_at)} · sent to {a.delivery_count} member{a.delivery_count === 1 ? '' : 's'}
             </div>
             <div style={{ fontSize: 11, color: '#eef2f8', lineHeight: 1.6 }}>{a.recommendation}</div>
