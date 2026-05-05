@@ -42,8 +42,17 @@ const CNAV = [
 
 export default function CareCircleApp() {
   const router = useRouter();
-  const [session, setSession] = useState<CCSession | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Hydrate the session synchronously from localStorage on first render.
+  // Without this, every refresh briefly rendered with session=null which
+  // could trip the useEffect redirect path and bounce the user to /login.
+  const [session, setSession] = useState<CCSession | null>(loadSession);
+  // Loading is only true when we genuinely have no session yet. When the
+  // user is already signed in (cc-session present in localStorage) we
+  // render the dashboard immediately and revalidate the access token in
+  // the background.
+  const [loading, setLoading] = useState<boolean>(
+    () => loadSession() === null,
+  );
   const [view, setView] = useState<'family' | 'clinical'>('family');
   const [page, setPage] = useState('home');
   const [chatMsgs, setChatMsgs] = useState<ChatMessage[]>([]);
@@ -59,12 +68,9 @@ export default function CareCircleApp() {
       }
       const valid = await ensureValidSession(s);
       if (cancelled) return;
-      if (!valid) {
-        window.localStorage.removeItem('cc-session');
-        router.push('/login');
-        return;
+      if (valid) {
+        setSession(valid);
       }
-      setSession(valid);
       setLoading(false);
     })();
     return () => {

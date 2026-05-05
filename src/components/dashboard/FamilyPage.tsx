@@ -93,33 +93,42 @@ function loadSession(): Session | null {
 }
 
 async function refreshSession(s: Session): Promise<Session | null> {
-  const r = await fetch(
-    `${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`,
-    {
-      method: 'POST',
-      headers: { apikey: ANON_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: s.refresh_token }),
-    },
-  );
-  if (!r.ok) return null;
-  const data = (await r.json()) as {
-    access_token: string;
-    refresh_token: string;
-    expires_at: number;
-  };
-  const updated: Session = {
-    ...s,
-    access_token: data.access_token,
-    refresh_token: data.refresh_token,
-    expires_at: data.expires_at,
-  };
-  window.localStorage.setItem('cc-session', JSON.stringify(updated));
-  return updated;
+  try {
+    const r = await fetch(
+      `${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`,
+      {
+        method: 'POST',
+        headers: { apikey: ANON_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: s.refresh_token }),
+      },
+    );
+    if (!r.ok) return null;
+    const data = (await r.json()) as {
+      access_token: string;
+      refresh_token: string;
+      expires_at: number;
+    };
+    const updated: Session = {
+      ...s,
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: data.expires_at,
+    };
+    window.localStorage.setItem('cc-session', JSON.stringify(updated));
+    return updated;
+  } catch {
+    return null;
+  }
 }
 
-async function ensureValidSession(s: Session): Promise<Session | null> {
+// Lenient: never returns null when there is an existing session in
+// localStorage. A failed token refresh keeps the user signed in for this
+// page load; data calls that 401 are surfaced inline rather than nuking
+// the session and redirecting to /login.
+async function ensureValidSession(s: Session): Promise<Session> {
   if (s.expires_at - 60 > Math.floor(Date.now() / 1000)) return s;
-  return refreshSession(s);
+  const refreshed = await refreshSession(s);
+  return refreshed ?? s;
 }
 
 async function sbAuthed(token: string, path: string): Promise<Response> {
@@ -164,7 +173,9 @@ const statusColor = (s: 'ok' | 'warn' | 'alert') =>
 
 export default function FamilyPage() {
   const router = useRouter();
-  const [session, setSession] = useState<Session | null>(null);
+  // Hydrate the session synchronously from localStorage on first render so a
+  // page refresh never momentarily looks signed-out.
+  const [session, setSession] = useState<Session | null>(loadSession);
   const [myRow, setMyRow] = useState<CareCircleRow | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [vitals, setVitals] = useState<ShieldVitals | null>(null);
@@ -181,11 +192,6 @@ export default function FamilyPage() {
         return;
       }
       const valid = await ensureValidSession(s);
-      if (!valid) {
-        window.localStorage.removeItem('cc-session');
-        router.push('/login');
-        return;
-      }
       if (cancelled) return;
       setSession(valid);
 
