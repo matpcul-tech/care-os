@@ -266,7 +266,7 @@ function computeBarSegments(b: BiomarkerResponse): BarSegment[] {
   for (const v of [b.normal_low, b.normal_high, b.optimal_low, b.optimal_high]) {
     if (v !== null && v > min && v < max) raw.add(v);
   }
-  const sorted = [...raw].sort((x, y) => x - y);
+  const sorted = Array.from(raw).sort((x, y) => x - y);
 
   const pct = (n: number) => ((n - min) / (max - min)) * 100;
   const segments: BarSegment[] = [];
