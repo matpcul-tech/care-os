@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { loadSession, ensureValidSession, type CCSession } from '@/lib/cc-data';
 
 /**
- * CareCircle Sovereign Edition.
+ * CareCircle Family Monitor.
  *
  * Family-facing remote monitoring surface. The patient lives on CareIQ
  * (cookie-authed). Family members log into care-os with a Supabase
@@ -1398,7 +1398,7 @@ function FamilyView({ session, router }: { session: CCSession; router: ReturnTyp
 }
 
 // =========================================================================
-// AIView (Sovereign Health OS)
+// AIView (CareCircle Health OS)
 // =========================================================================
 
 interface ChatTurn { role: 'user' | 'ai'; text: string }
@@ -1447,7 +1447,7 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
       } else if (typeof d.insight === 'string' && d.insight.length > 0) {
         aiText = d.insight;
       } else {
-        aiText = 'Sovereign Health OS is unavailable right now. Try again in a moment.';
+        aiText = 'CareCircle Health OS is unavailable right now. Try again in a moment.';
       }
       setMsgs((p) => [...p, { role: 'ai', text: aiText }]);
     } catch {
@@ -1490,11 +1490,11 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: P, fontSize: 16, color: INK, marginBottom: 2 }}>
-              Sovereign Health OS
+              CareCircle Health OS
             </div>
             <div style={{ fontSize: 11, color: SUB, lineHeight: 1.5 }}>
-              Sovereign AI grounded in your loved one's live wearable data
-              and clinical panel. Every answer cites her real numbers.
+              AI grounded in your loved one's live wearable data and clinical
+              panel. Every answer cites her real numbers.
             </div>
             <div
               style={{
@@ -1557,7 +1557,7 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
         ))}
         {sending && (
           <div style={{ padding: '9px 12px', fontSize: 11, color: MUTED, fontStyle: 'italic' }}>
-            Sovereign Health OS thinking...
+            CareCircle Health OS thinking...
           </div>
         )}
       </div>
@@ -1598,7 +1598,7 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
               ask(input);
             }
           }}
-          placeholder="Ask Sovereign Health OS..."
+          placeholder="Ask CareCircle Health OS..."
           disabled={sending}
           style={{
             flex: 1,
@@ -1769,7 +1769,7 @@ export default function CareCircleApp() {
                     marginTop: 3,
                   }}
                 >
-                  Sovereign Edition
+                  Family Monitor
                 </div>
               </div>
             </div>
