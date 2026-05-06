@@ -416,7 +416,7 @@ function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
             </svg>
           </div>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: INK }}>Sovereign Wearable</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: INK }}>Live Wearable</div>
             <div style={{ fontFamily: T, fontSize: 9, color: MUTED, marginTop: 1 }}>
               Withings ScanWatch · Syncing every 5s
             </div>
@@ -462,7 +462,7 @@ function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
 }
 
 // =========================================================================
-// ZKShieldBanner (Chickasaw Nation infrastructure note)
+// ZKShieldBanner
 // =========================================================================
 
 function ZKShieldBanner() {
@@ -495,8 +495,8 @@ function ZKShieldBanner() {
         />
       </svg>
       <div style={{ fontSize: 11, lineHeight: 1.55, color: SUB }}>
-        <span style={{ color: OK, fontWeight: 700 }}>ZK Sovereign Shield Active.</span>{' '}
-        Wearable data processed on Chickasaw Nation infrastructure only.
+        <span style={{ color: OK, fontWeight: 700 }}>ZK Shield Active.</span>{' '}
+        AES-256-GCM at rest, HIPAA-compliant infrastructure, audit logged.
       </div>
     </div>
   );
@@ -1180,7 +1180,7 @@ function CalendarView({ session, router }: { session: CCSession; router: ReturnT
             textAlign: 'center',
           }}
         >
-          No upcoming appointments. Add one from the patient or another circle member's Calendar.
+          No upcoming appointments.
         </div>
       ) : (
         appts.map((a) => (
@@ -1398,7 +1398,7 @@ function FamilyView({ session, router }: { session: CCSession; router: ReturnTyp
 }
 
 // =========================================================================
-// AIView (Tribal Health OS)
+// AIView (Sovereign Health OS)
 // =========================================================================
 
 interface ChatTurn { role: 'user' | 'ai'; text: string }
@@ -1447,7 +1447,7 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
       } else if (typeof d.insight === 'string' && d.insight.length > 0) {
         aiText = d.insight;
       } else {
-        aiText = 'Tribal Health OS is unavailable right now. Try again in a moment.';
+        aiText = 'Sovereign Health OS is unavailable right now. Try again in a moment.';
       }
       setMsgs((p) => [...p, { role: 'ai', text: aiText }]);
     } catch {
@@ -1476,24 +1476,25 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
               borderRadius: 9,
               background: `linear-gradient(135deg, ${ORANGE}, ${ORANGE2})`,
               color: '#1a1208',
-              fontSize: 18,
+              fontSize: 13,
               fontWeight: 800,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               flexShrink: 0,
+              letterSpacing: '.05em',
             }}
             aria-hidden
           >
-            ☥
+            CC
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: P, fontSize: 16, color: INK, marginBottom: 2 }}>
-              Tribal Health OS
+              Sovereign Health OS
             </div>
             <div style={{ fontSize: 11, color: SUB, lineHeight: 1.5 }}>
-              Sovereign AI with live wearable data and Chickasaw Nation context.
-              Every answer grounded in her real numbers.
+              Sovereign AI grounded in your loved one's live wearable data
+              and clinical panel. Every answer cites her real numbers.
             </div>
             <div
               style={{
@@ -1556,7 +1557,7 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
         ))}
         {sending && (
           <div style={{ padding: '9px 12px', fontSize: 11, color: MUTED, fontStyle: 'italic' }}>
-            Tribal Health OS thinking...
+            Sovereign Health OS thinking...
           </div>
         )}
       </div>
@@ -1597,7 +1598,7 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
               ask(input);
             }
           }}
-          placeholder="Ask Tribal Health OS..."
+          placeholder="Ask Sovereign Health OS..."
           disabled={sending}
           style={{
             flex: 1,
@@ -1718,8 +1719,6 @@ export default function CareCircleApp() {
     }
   };
 
-  const showWearable = true;
-
   return (
     <>
       <style>{`
@@ -1826,12 +1825,8 @@ export default function CareCircleApp() {
 
         <div className="sov-scroll">
           <div className="sov-pad">
-            {showWearable && (
-              <>
-                <LiveWearableStrip shield={shield} />
-                <ZKShieldBanner />
-              </>
-            )}
+            <LiveWearableStrip shield={shield} />
+            <ZKShieldBanner />
             {renderTab()}
             <div style={{ padding: '12px 0 0' }}>
               <button
