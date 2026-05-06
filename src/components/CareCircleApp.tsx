@@ -35,14 +35,16 @@ const T = "'DM Mono',monospace";
 const P = "'Playfair Display',serif";
 const O = "'Outfit',sans-serif";
 
-const ORANGE = '#f97316';
-const ORANGE2 = '#fb923c';
+// Primary accent: CareCircle teal (matches the marketing site CTA).
+const TEAL = '#14b8a6';
+const TEAL2 = '#2dd4bf';
 const OK = '#4ade80';
-const WARN = '#f97316';
+const WARN = '#d4a843';
 const ALERT = '#e8526e';
 const MUTED = '#7a9bbf';
 const SUB = '#a3b5cc';
 const INK = '#eef2f8';
+const BG = '#0a1628';
 const CARD = 'rgba(255,255,255,0.04)';
 const BORDER = '1px solid rgba(255,255,255,0.06)';
 
@@ -398,7 +400,7 @@ function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
               width: 28,
               height: 28,
               borderRadius: 7,
-              background: 'rgba(249,115,22,0.12)',
+              background: 'rgba(20,184,166,0.14)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -408,7 +410,7 @@ function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
             <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden>
               <path
                 d="M5.5 13.5a3 3 0 010-6h.55a4.5 4.5 0 018.9 0H15a3 3 0 010 6H5.5z"
-                stroke={ORANGE}
+                stroke={TEAL}
                 strokeWidth="1.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -516,7 +518,7 @@ function PatientCard({
   shieldLoading: boolean;
 }) {
   const score = shield ? Math.round(shield.risk_score) : 0;
-  const scoreColor = score >= 75 ? OK : score >= 55 ? ORANGE : ALERT;
+  const scoreColor = score >= 75 ? OK : score >= 55 ? WARN : ALERT;
   const riskLabel = shieldLoading
     ? 'Loading...'
     : shield?.risk_label || 'Not yet computed';
@@ -541,8 +543,8 @@ function PatientCard({
             width: 44,
             height: 44,
             borderRadius: '50%',
-            background: `linear-gradient(135deg, ${ORANGE}, ${ORANGE2})`,
-            color: '#1a1208',
+            background: `linear-gradient(135deg, ${TEAL}, ${TEAL2})`,
+            color: '#042f2a',
             fontWeight: 800,
             fontSize: 16,
             display: 'flex',
@@ -711,7 +713,7 @@ function ActiveProtocols({ shield }: { shield: ShieldPayload | null }) {
       <div style={{ marginBottom: 16 }}>
         {PROTOCOLS.map((p) => {
           const stats = computeProtocol(shield?.biomarkers, p.keys);
-          const pctColor = stats.pct >= 70 ? OK : stats.pct >= 40 ? ORANGE : ALERT;
+          const pctColor = stats.pct >= 70 ? OK : stats.pct >= 40 ? TEAL : ALERT;
           return (
             <div
               key={p.name}
@@ -812,7 +814,7 @@ function RiskDomains({ shield }: { shield: ShieldPayload | null }) {
         {DOMAINS.map((d, i) => {
           const stats = d.cat ? computeDomain(shield?.biomarkers, d.cat) : null;
           const score = stats?.score ?? null;
-          const tone = score == null ? MUTED : score >= 80 ? OK : score >= 60 ? ORANGE : ALERT;
+          const tone = score == null ? MUTED : score >= 80 ? OK : score >= 60 ? TEAL : ALERT;
           return (
             <div
               key={d.name}
@@ -968,14 +970,14 @@ function MedsView({ session, router }: { session: CCSession; router: ReturnType<
                 Wearable confirms absorption patterns
               </div>
             </div>
-            <div style={{ fontFamily: P, fontSize: 32, fontWeight: 700, color: ORANGE }}>{pct}%</div>
+            <div style={{ fontFamily: P, fontSize: 32, fontWeight: 700, color: TEAL }}>{pct}%</div>
           </div>
           <div style={{ height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden', marginTop: 10 }}>
             <div
               style={{
                 height: '100%',
                 width: `${pct}%`,
-                background: `linear-gradient(90deg, ${ORANGE}, ${ORANGE2})`,
+                background: `linear-gradient(90deg, ${TEAL}, ${TEAL2})`,
                 borderRadius: 2,
                 transition: 'width 1s ease',
               }}
@@ -991,7 +993,7 @@ function MedsView({ session, router }: { session: CCSession; router: ReturnType<
           style={{
             fontFamily: T,
             fontSize: 9,
-            color: ORANGE,
+            color: TEAL,
             background: 'transparent',
             border: 'none',
             cursor: 'pointer',
@@ -1077,9 +1079,9 @@ function MedsView({ session, router }: { session: CCSession; router: ReturnType<
                       fontSize: 8,
                       padding: '2px 7px',
                       borderRadius: 5,
-                      background: 'rgba(249,115,22,0.12)',
-                      color: ORANGE,
-                      border: '1px solid rgba(249,115,22,0.3)',
+                      background: 'rgba(20,184,166,0.12)',
+                      color: TEAL,
+                      border: '1px solid rgba(20,184,166,0.3)',
                       letterSpacing: '.1em',
                       textTransform: 'uppercase',
                     }}
@@ -1198,7 +1200,7 @@ function CalendarView({ session, router }: { session: CCSession; router: ReturnT
               style={{
                 fontFamily: T,
                 fontSize: 9,
-                color: ORANGE,
+                color: TEAL,
                 textTransform: 'uppercase',
                 letterSpacing: '.12em',
                 marginBottom: 4,
@@ -1265,7 +1267,7 @@ function FamilyView({ session, router }: { session: CCSession; router: ReturnTyp
 
   if (loading) return <div style={{ padding: 18, color: MUTED, fontSize: 12 }}>Loading family hub...</div>;
 
-  const palette = [ORANGE, ORANGE2, '#d4a843', '#8060cc', '#00d4b8', '#4ade80'];
+  const palette = [TEAL, TEAL2, '#06b6d4', '#8b5cf6', '#0ea5e9', '#4ade80'];
 
   return (
     <>
@@ -1323,7 +1325,7 @@ function FamilyView({ session, router }: { session: CCSession; router: ReturnTyp
                       height: 44,
                       borderRadius: '50%',
                       background: `linear-gradient(135deg, ${c}, ${c}aa)`,
-                      color: '#1a1208',
+                      color: '#042f2a',
                       fontWeight: 800,
                       fontSize: 13,
                       display: 'flex',
@@ -1474,8 +1476,8 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
               width: 36,
               height: 36,
               borderRadius: 9,
-              background: `linear-gradient(135deg, ${ORANGE}, ${ORANGE2})`,
-              color: '#1a1208',
+              background: `linear-gradient(135deg, ${TEAL}, ${TEAL2})`,
+              color: '#042f2a',
               fontSize: 13,
               fontWeight: 800,
               display: 'flex',
@@ -1544,8 +1546,8 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
                 maxWidth: '80%',
                 padding: '9px 12px',
                 borderRadius: 12,
-                background: m.role === 'user' ? `linear-gradient(135deg, ${ORANGE}, ${ORANGE2})` : '#111827',
-                color: m.role === 'user' ? '#1a1208' : '#e2e8f0',
+                background: m.role === 'user' ? `linear-gradient(135deg, ${TEAL}, ${TEAL2})` : '#111827',
+                color: m.role === 'user' ? '#042f2a' : '#e2e8f0',
                 fontSize: 12,
                 lineHeight: 1.55,
                 wordBreak: 'break-word',
@@ -1573,9 +1575,9 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
               style={{
                 padding: '7px 12px',
                 borderRadius: 16,
-                border: '1px solid rgba(249,115,22,0.3)',
-                background: 'rgba(249,115,22,0.08)',
-                color: ORANGE,
+                border: '1px solid rgba(20,184,166,0.3)',
+                background: 'rgba(20,184,166,0.08)',
+                color: TEAL,
                 fontSize: 11,
                 fontFamily: O,
                 cursor: sending ? 'not-allowed' : 'pointer',
@@ -1620,8 +1622,8 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
             height: 40,
             borderRadius: '50%',
             border: 'none',
-            background: `linear-gradient(135deg, ${ORANGE}, ${ORANGE2})`,
-            color: '#1a1208',
+            background: `linear-gradient(135deg, ${TEAL}, ${TEAL2})`,
+            color: '#042f2a',
             fontSize: 16,
             fontWeight: 700,
             cursor: sending || !input.trim() ? 'not-allowed' : 'pointer',
@@ -1683,7 +1685,7 @@ export default function CareCircleApp() {
       <div
         style={{
           minHeight: '100vh',
-          background: '#0b1220',
+          background: BG,
           color: MUTED,
           fontFamily: O,
           display: 'flex',
@@ -1725,15 +1727,15 @@ export default function CareCircleApp() {
         @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Mono:wght@300;400;500&family=Outfit:wght@300;400;500;600;700&display=swap');
         *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-        .sov{display:flex;flex-direction:column;height:100vh;height:100dvh;font-family:'Outfit',sans-serif;color:#eef2f8;background:#0b1220;position:relative;overflow:hidden;max-width:480px;margin:0 auto}
-        .sov::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;background:radial-gradient(ellipse 80% 40% at 80% 0%,rgba(249,115,22,0.08) 0%,transparent 60%),radial-gradient(ellipse 60% 60% at 0% 100%,rgba(128,96,204,0.06) 0%,transparent 60%)}
-        .sov-hdr{position:relative;z-index:10;flex-shrink:0;padding:14px 18px 12px;background:rgba(11,18,32,0.92);backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,0.06)}
+        .sov{display:flex;flex-direction:column;height:100vh;height:100dvh;font-family:'Outfit',sans-serif;color:#eef2f8;background:${BG};position:relative;overflow:hidden;max-width:480px;margin:0 auto}
+        .sov::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;background:radial-gradient(ellipse 80% 40% at 80% 0%,rgba(20,184,166,0.08) 0%,transparent 60%),radial-gradient(ellipse 60% 60% at 0% 100%,rgba(45,212,191,0.06) 0%,transparent 60%)}
+        .sov-hdr{position:relative;z-index:10;flex-shrink:0;padding:14px 18px 12px;background:rgba(10,22,40,0.92);backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,0.06)}
         .sov-scroll{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;position:relative;z-index:1}
         .sov-pad{padding:14px 18px calc(96px + env(safe-area-inset-bottom,0px))}
-        .sov-bnav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(11,18,32,0.97);backdrop-filter:blur(20px);border-top:1px solid rgba(255,255,255,0.06);display:grid;grid-template-columns:repeat(5,1fr);padding:8px 4px calc(10px + env(safe-area-inset-bottom,0px));z-index:20}
+        .sov-bnav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(10,22,40,0.97);backdrop-filter:blur(20px);border-top:1px solid rgba(255,255,255,0.06);display:grid;grid-template-columns:repeat(5,1fr);padding:8px 4px calc(10px + env(safe-area-inset-bottom,0px));z-index:20}
         .sov-bnav-btn{background:transparent;border:none;color:#7a9bbf;font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 4px;border-radius:9px;transition:color .2s;min-height:50px;justify-content:center;position:relative}
-        .sov-bnav-btn.on{color:#f97316}
-        .sov-bnav-btn.on::before{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:32px;height:2px;background:linear-gradient(90deg,#f97316,#fb923c);border-radius:0 0 2px 2px}
+        .sov-bnav-btn.on{color:${TEAL}}
+        .sov-bnav-btn.on::before{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:32px;height:2px;background:linear-gradient(90deg,${TEAL},${TEAL2});border-radius:0 0 2px 2px}
       `}</style>
       <div className="sov">
         <div className="sov-hdr">
@@ -1744,13 +1746,13 @@ export default function CareCircleApp() {
                   width: 38,
                   height: 38,
                   borderRadius: 9,
-                  background: `linear-gradient(135deg, ${ORANGE}, ${ORANGE2})`,
+                  background: `linear-gradient(135deg, ${TEAL}, ${TEAL2})`,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   fontSize: 14,
                   fontWeight: 800,
-                  color: '#1a1208',
+                  color: '#042f2a',
                   flexShrink: 0,
                   letterSpacing: '.05em',
                 }}
@@ -1763,7 +1765,7 @@ export default function CareCircleApp() {
                   style={{
                     fontFamily: T,
                     fontSize: 8,
-                    color: ORANGE,
+                    color: TEAL,
                     letterSpacing: '.22em',
                     textTransform: 'uppercase',
                     marginTop: 3,
