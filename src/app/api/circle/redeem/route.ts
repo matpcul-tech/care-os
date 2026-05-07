@@ -91,6 +91,49 @@ function inviteUsable(invite: InviteRow): { ok: true } | { ok: false; reason: st
   return { ok: true };
 }
 
+// Backfill patient_name when the invite row was written with null. The
+// patient is a Supabase auth user (CareIQ schema: patients.id = auth.uid()),
+// and the patients table itself stores only an AES-256-GCM-encrypted
+// profile blob that care-os cannot read without CareIQ's vault key. So we
+// derive the display name from the auth.users metadata that the patient
+// completed during onboarding, falling back to the email local-part if
+// metadata is empty too. Anything we resolve here is also written into
+// care_circle.patient_name so /login on a return visit can read it
+// without going through this fallback again.
+async function resolvePatientName(patientId: string): Promise<string | null> {
+  try {
+    const r = await fetch(
+      `${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(patientId)}`,
+      {
+        headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
+        cache: 'no-store',
+      },
+    );
+    if (!r.ok) return null;
+    const data = (await r.json()) as {
+      email?: string;
+      user_metadata?: Record<string, unknown>;
+    };
+    const meta = data.user_metadata || {};
+    const fullName =
+      typeof meta.full_name === 'string' ? meta.full_name.trim() : '';
+    if (fullName) return fullName;
+    const name = typeof meta.name === 'string' ? meta.name.trim() : '';
+    if (name) return name;
+    const first = typeof meta.first_name === 'string' ? meta.first_name.trim() : '';
+    const last = typeof meta.last_name === 'string' ? meta.last_name.trim() : '';
+    const composed = [first, last].filter(Boolean).join(' ').trim();
+    if (composed) return composed;
+    if (typeof data.email === 'string' && data.email.includes('@')) {
+      const local = data.email.split('@')[0].trim();
+      if (local) return local;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
@@ -120,10 +163,16 @@ export async function GET(req: NextRequest) {
     const usable = inviteUsable(invite);
     if (!usable.ok) return bad(usable.reason, 410);
 
+    // GET also returns the resolved name so the signup page header reads
+    // "Join {name}'s Care Circle" correctly even when the invite row was
+    // written with patient_name=null.
+    const resolvedName =
+      invite.patient_name || (await resolvePatientName(invite.patient_id));
+
     return NextResponse.json(
       {
         valid: true,
-        patient_name: invite.patient_name,
+        patient_name: resolvedName,
         suggested_relationship: invite.suggested_relationship,
         suggested_alert_level: invite.suggested_alert_level,
         expires_at: invite.expires_at,
@@ -171,6 +220,12 @@ export async function POST(req: NextRequest) {
     const usable = inviteUsable(invite);
     if (!usable.ok) return bad(usable.reason, 410);
 
+    // Resolve patient_name with auth-metadata fallback so the cc-session
+    // and care_circle row both get a usable display name, even if the
+    // invite was created without one.
+    const patientName =
+      invite.patient_name || (await resolvePatientName(invite.patient_id));
+
     const finalRelationship =
       relationship || invite.suggested_relationship || 'Family';
     const finalAlertLevel: AlertLevel =
@@ -212,8 +267,8 @@ export async function POST(req: NextRequest) {
     }
     const newUser = (await createRes.json()) as { id: string; email: string };
 
-    // Insert care_circle row. patient_name is denormalized from the invite
-    // so /login can restore it without re-querying care_circle_invites.
+    // Insert care_circle row. patient_name is denormalized so /login can
+    // restore it without re-querying care_circle_invites or auth.users.
     const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/care_circle`, {
       method: 'POST',
       headers: {
@@ -225,7 +280,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify([
         {
           patient_id: invite.patient_id,
-          patient_name: invite.patient_name,
+          patient_name: patientName,
           member_user_id: newUser.id,
           member_email: email,
           member_name,
@@ -250,6 +305,24 @@ export async function POST(req: NextRequest) {
       });
     }
     const circleRow = ((await insertRes.json()) as Array<Record<string, unknown>>)[0];
+
+    // If we backfilled the name (i.e., the invite row had null), patch the
+    // invite row so any later GET on the same code also surfaces the name.
+    // Best-effort: a failure here does not break the redeem flow.
+    if (!invite.patient_name && patientName) {
+      await fetch(
+        `${SUPABASE_URL}/rest/v1/care_circle_invites?id=eq.${invite.id}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: SERVICE_ROLE,
+            Authorization: `Bearer ${SERVICE_ROLE}`,
+          },
+          body: JSON.stringify({ patient_name: patientName }),
+        },
+      ).catch(() => {});
+    }
 
     await fetch(
       `${SUPABASE_URL}/rest/v1/care_circle_invites?id=eq.${invite.id}`,
@@ -282,7 +355,7 @@ export async function POST(req: NextRequest) {
         ok: true,
         user: { id: newUser.id, email: newUser.email },
         circle: circleRow,
-        patient: { id: invite.patient_id, name: invite.patient_name },
+        patient: { id: invite.patient_id, name: patientName },
         session,
       },
       { headers: CORS_HEADERS },
