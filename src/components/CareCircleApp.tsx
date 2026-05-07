@@ -218,6 +218,88 @@ function fmtSleep(h: number | null | undefined): string {
 }
 
 // =========================================================================
+// Alert engine. Same thresholds the LIVE wearable strip uses, but
+// surfaced as a flat list with severity, label, current value, and the
+// safe-range note. Recomputes every poll tick because the input
+// shield payload comes from the same useShieldPolling hook.
+// =========================================================================
+
+type AlertSeverity = 'critical' | 'warn';
+
+interface ActiveAlert {
+  id: string;
+  severity: AlertSeverity;
+  title: string;
+  vital: string;
+  value: string;
+  range: string;
+  detail?: string;
+}
+
+function flatBiomarkerVal(panel: BiomarkerPanel | undefined, key: string): number | null {
+  const e = flatBiomarker(panel, key);
+  return e?.value ?? null;
+}
+
+function computeAlerts(s: ShieldPayload | null): ActiveAlert[] {
+  if (!s) return [];
+  const out: ActiveAlert[] = [];
+
+  if (s.hr != null) {
+    if (s.hr < 50) {
+      out.push({ id: 'hr-low', severity: 'critical', title: 'Heart rate low', vital: 'HR', value: `${Math.round(s.hr)} bpm`, range: 'safe 50-100 bpm' });
+    } else if (s.hr > 100) {
+      out.push({ id: 'hr-high', severity: 'critical', title: 'Heart rate elevated', vital: 'HR', value: `${Math.round(s.hr)} bpm`, range: 'safe 50-100 bpm' });
+    } else if (s.hr < 55 || s.hr > 95) {
+      out.push({ id: 'hr-warn', severity: 'warn', title: 'Heart rate near edge', vital: 'HR', value: `${Math.round(s.hr)} bpm`, range: 'optimal 55-95 bpm' });
+    }
+  }
+
+  if (s.spo2 != null) {
+    if (s.spo2 < 90) {
+      out.push({ id: 'spo2-low', severity: 'critical', title: 'Oxygen saturation low', vital: 'SpO2', value: `${s.spo2.toFixed(1)}%`, range: 'safe at or above 95%', detail: 'If sustained, contact a clinician.' });
+    } else if (s.spo2 < 95) {
+      out.push({ id: 'spo2-warn', severity: 'warn', title: 'Oxygen saturation borderline', vital: 'SpO2', value: `${s.spo2.toFixed(1)}%`, range: 'optimal at or above 95%' });
+    }
+  }
+
+  if (s.bp_systolic != null && s.bp_diastolic != null) {
+    const sys = s.bp_systolic, dia = s.bp_diastolic;
+    if (sys >= 180 || dia >= 120) {
+      out.push({ id: 'bp-crisis', severity: 'critical', title: 'Hypertensive crisis', vital: 'BP', value: `${sys}/${dia} mmHg`, range: 'urgent at 180/120 or higher', detail: 'Seek emergency care.' });
+    } else if (sys >= 140 || dia >= 90) {
+      out.push({ id: 'bp-high', severity: 'critical', title: 'Blood pressure high', vital: 'BP', value: `${sys}/${dia} mmHg`, range: 'safe under 140/90' });
+    } else if (sys >= 130 || dia >= 80) {
+      out.push({ id: 'bp-warn', severity: 'warn', title: 'Blood pressure elevated', vital: 'BP', value: `${sys}/${dia} mmHg`, range: 'optimal under 130/80' });
+    }
+  }
+
+  if (s.fasting_glucose != null) {
+    const g = s.fasting_glucose;
+    if (g < 70) {
+      out.push({ id: 'glu-low', severity: 'critical', title: 'Blood sugar low', vital: 'Glucose', value: `${Math.round(g)} mg/dL`, range: 'safe 70-99 mg/dL fasting' });
+    } else if (g >= 200) {
+      out.push({ id: 'glu-high', severity: 'critical', title: 'Blood sugar very high', vital: 'Glucose', value: `${Math.round(g)} mg/dL`, range: 'safe 70-99 mg/dL fasting' });
+    } else if (g >= 126) {
+      out.push({ id: 'glu-warn', severity: 'warn', title: 'Blood sugar elevated', vital: 'Glucose', value: `${Math.round(g)} mg/dL`, range: 'optimal under 100 mg/dL' });
+    }
+  }
+
+  const t = flatBiomarkerVal(s.biomarkers, 'body_temperature');
+  if (t != null) {
+    if (t >= 102) {
+      out.push({ id: 'temp-fever', severity: 'critical', title: 'High fever', vital: 'Temp', value: `${t.toFixed(1)} F`, range: 'safe 97-99 F' });
+    } else if (t < 95) {
+      out.push({ id: 'temp-low', severity: 'critical', title: 'Body temperature low', vital: 'Temp', value: `${t.toFixed(1)} F`, range: 'safe 97-99 F' });
+    } else if (t >= 100.4 || t < 96) {
+      out.push({ id: 'temp-warn', severity: 'warn', title: 'Temperature out of range', vital: 'Temp', value: `${t.toFixed(1)} F`, range: 'optimal 97-99 F' });
+    }
+  }
+
+  return out.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'critical' ? -1 : 1));
+}
+
+// =========================================================================
 // Cell (used by wearable + patient grids)
 // =========================================================================
 
@@ -1639,12 +1721,171 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
 }
 
 // =========================================================================
+// AlertsView (24hr health watch over live wearable readings)
+// =========================================================================
+
+function AlertsView({ shield, shieldLoading }: { shield: ShieldPayload | null; shieldLoading: boolean }) {
+  const alerts = computeAlerts(shield);
+  const critical = alerts.filter((a) => a.severity === 'critical');
+  const warn = alerts.filter((a) => a.severity === 'warn');
+
+  return (
+    <>
+      <div
+        style={{
+          background: `linear-gradient(135deg, rgba(20,184,166,0.12), rgba(20,184,166,0.04))`,
+          border: `1px solid rgba(20,184,166,0.3)`,
+          borderRadius: 12,
+          padding: 12,
+          marginBottom: 14,
+          fontSize: 11,
+          color: SUB,
+          lineHeight: 1.6,
+        }}
+      >
+        <div style={{ fontFamily: P, fontSize: 14, color: INK, marginBottom: 4 }}>
+          24-hour health watch
+        </div>
+        Alerts trigger automatically when wearable readings cross safe
+        thresholds. Phone notifications are coming soon; for now keep
+        this tab open to see them in real time.
+      </div>
+
+      {shieldLoading && alerts.length === 0 && (
+        <div style={{ padding: '14px 0', fontSize: 12, color: MUTED }}>
+          Reading live vitals...
+        </div>
+      )}
+
+      {!shieldLoading && alerts.length === 0 && (
+        <div
+          style={{
+            background: 'rgba(74,222,128,0.06)',
+            border: '1px solid rgba(74,222,128,0.3)',
+            borderRadius: 12,
+            padding: 16,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+          }}
+        >
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: '50%',
+              background: 'rgba(74,222,128,0.18)',
+              color: OK,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 16,
+              flexShrink: 0,
+            }}
+            aria-hidden
+          >
+            ✓
+          </div>
+          <div>
+            <div style={{ fontSize: 13, color: OK, fontWeight: 700, marginBottom: 2 }}>
+              All vitals in safe range
+            </div>
+            <div style={{ fontSize: 11, color: SUB, lineHeight: 1.55 }}>
+              Last check moments ago. We'll surface anything that crosses a
+              clinical threshold here.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {critical.length > 0 && (
+        <>
+          <div
+            style={{
+              fontFamily: T,
+              fontSize: 9,
+              color: ALERT,
+              letterSpacing: '.18em',
+              textTransform: 'uppercase',
+              fontWeight: 700,
+              margin: '4px 0 8px',
+            }}
+          >
+            Critical · {critical.length}
+          </div>
+          {critical.map((a) => (
+            <AlertRow key={a.id} alert={a} />
+          ))}
+        </>
+      )}
+
+      {warn.length > 0 && (
+        <>
+          <div
+            style={{
+              fontFamily: T,
+              fontSize: 9,
+              color: WARN,
+              letterSpacing: '.18em',
+              textTransform: 'uppercase',
+              fontWeight: 700,
+              margin: '14px 0 8px',
+            }}
+          >
+            Watch · {warn.length}
+          </div>
+          {warn.map((a) => (
+            <AlertRow key={a.id} alert={a} />
+          ))}
+        </>
+      )}
+    </>
+  );
+}
+
+function AlertRow({ alert }: { alert: ActiveAlert }) {
+  const tone = alert.severity === 'critical' ? ALERT : WARN;
+  const bg =
+    alert.severity === 'critical'
+      ? 'rgba(232,82,110,0.06)'
+      : 'rgba(212,168,67,0.06)';
+  const border =
+    alert.severity === 'critical'
+      ? '1px solid rgba(232,82,110,0.3)'
+      : '1px solid rgba(212,168,67,0.3)';
+  return (
+    <div
+      style={{
+        background: bg,
+        border,
+        borderLeft: `3px solid ${tone}`,
+        borderRadius: 11,
+        padding: 12,
+        marginBottom: 8,
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: INK }}>{alert.title}</span>
+        <span style={{ fontFamily: T, fontSize: 14, fontWeight: 700, color: tone }}>{alert.value}</span>
+      </div>
+      <div style={{ fontFamily: T, fontSize: 9, color: MUTED, letterSpacing: '.04em', marginBottom: alert.detail ? 6 : 0 }}>
+        {alert.vital} · {alert.range}
+      </div>
+      {alert.detail && (
+        <div style={{ fontSize: 11, color: SUB, lineHeight: 1.5 }}>{alert.detail}</div>
+      )}
+    </div>
+  );
+}
+
+// =========================================================================
 // Top-level CareCircleApp
 // =========================================================================
 
-type TabId = 'home' | 'meds' | 'cal' | 'family' | 'ai';
+type TabId = 'home' | 'alerts' | 'meds' | 'cal' | 'family' | 'ai';
 const NAV: Array<{ id: TabId; icon: string; label: string }> = [
   { id: 'home', icon: '⌂', label: 'Home' },
+  { id: 'alerts', icon: '⚠', label: 'Alerts' },
   { id: 'meds', icon: '☥', label: 'Meds' },
   { id: 'cal', icon: '⦾', label: 'Cal' },
   { id: 'family', icon: '♤', label: 'Family' },
@@ -1701,6 +1942,8 @@ export default function CareCircleApp() {
 
   const renderTab = () => {
     switch (tab) {
+      case 'alerts':
+        return <AlertsView shield={shield} shieldLoading={shieldLoading} />;
       case 'meds':
         return <MedsView session={session} router={router} />;
       case 'cal':
@@ -1732,7 +1975,7 @@ export default function CareCircleApp() {
         .sov-hdr{position:relative;z-index:10;flex-shrink:0;padding:14px 18px 12px;background:rgba(10,22,40,0.92);backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,0.06)}
         .sov-scroll{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;position:relative;z-index:1}
         .sov-pad{padding:14px 18px calc(96px + env(safe-area-inset-bottom,0px))}
-        .sov-bnav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(10,22,40,0.97);backdrop-filter:blur(20px);border-top:1px solid rgba(255,255,255,0.06);display:grid;grid-template-columns:repeat(5,1fr);padding:8px 4px calc(10px + env(safe-area-inset-bottom,0px));z-index:20}
+        .sov-bnav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(10,22,40,0.97);backdrop-filter:blur(20px);border-top:1px solid rgba(255,255,255,0.06);display:grid;grid-template-columns:repeat(6,1fr);padding:8px 4px calc(10px + env(safe-area-inset-bottom,0px));z-index:20}
         .sov-bnav-btn{background:transparent;border:none;color:#7a9bbf;font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 4px;border-radius:9px;transition:color .2s;min-height:50px;justify-content:center;position:relative}
         .sov-bnav-btn.on{color:${TEAL}}
         .sov-bnav-btn.on::before{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:32px;height:2px;background:linear-gradient(90deg,${TEAL},${TEAL2});border-radius:0 0 2px 2px}
