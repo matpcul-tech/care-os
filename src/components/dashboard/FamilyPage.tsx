@@ -29,6 +29,7 @@ interface CareCircleRow {
   member_phone: string | null;
   relationship: string;
   alert_level: Severity;
+  patient_nickname: string | null;
   created_at: string;
 }
 
@@ -183,6 +184,12 @@ export default function FamilyPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Inline nickname editor state.
+  const [editingNickname, setEditingNickname] = useState(false);
+  const [nicknameDraft, setNicknameDraft] = useState('');
+  const [savingNickname, setSavingNickname] = useState(false);
+  const [nicknameError, setNicknameError] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -252,6 +259,41 @@ export default function FamilyPage() {
     router.push('/login');
   };
 
+  // Save the inline nickname draft to care_circle.patient_nickname via
+  // /api/circle/update-nickname. Empty draft clears the column (nickname
+  // becomes null), so the row re-falls-through to session.patient_name.
+  async function saveNickname() {
+    if (savingNickname || !session) return;
+    setSavingNickname(true);
+    setNicknameError(null);
+    try {
+      const valid = await ensureValidSession(session);
+      const r = await fetch('/api/circle/update-nickname', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${valid.access_token}`,
+        },
+        body: JSON.stringify({ nickname: nicknameDraft.trim() || null }),
+      });
+      const d = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        nickname?: string | null;
+        error?: string;
+      };
+      if (!r.ok || !d.ok) {
+        throw new Error(d.error || `save failed (${r.status})`);
+      }
+      const saved = d.nickname ?? null;
+      setMyRow((prev) => (prev ? { ...prev, patient_nickname: saved } : prev));
+      setEditingNickname(false);
+    } catch (e) {
+      setNicknameError((e as Error).message);
+    } finally {
+      setSavingNickname(false);
+    }
+  }
+
   if (loading) {
     return (
       <div style={PAGE_PAD}>
@@ -300,7 +342,12 @@ export default function FamilyPage() {
     );
   }
 
-  const patientName = session.patient_name || 'Your loved one';
+  // Display priority: per-member nickname first, then the patient_name
+  // we wrote into cc-session at signup/login, then a generic fallback.
+  const displayName =
+    myRow.patient_nickname ||
+    session.patient_name ||
+    'Your loved one';
   const lastAlert = alerts[0];
 
   const vitalCells = vitals
@@ -367,16 +414,166 @@ export default function FamilyPage() {
           marginBottom: 12,
         }}
       >
-        <div
-          style={{
-            fontFamily: "'Playfair Display',serif",
-            fontSize: 22,
-            color: '#eef2f8',
-            marginBottom: 4,
-          }}
-        >
-          {patientName}
-        </div>
+        {editingNickname ? (
+          <div style={{ marginBottom: 4 }}>
+            <input
+              autoFocus
+              value={nicknameDraft}
+              onChange={(e) => setNicknameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  saveNickname();
+                } else if (e.key === 'Escape') {
+                  setEditingNickname(false);
+                  setNicknameError(null);
+                }
+              }}
+              maxLength={60}
+              placeholder="Mom, Grandma Mary, Dad..."
+              aria-label="Patient nickname"
+              disabled={savingNickname}
+              style={{
+                width: '100%',
+                background: '#11243d',
+                border: '1px solid #1e3a5f',
+                borderRadius: 8,
+                padding: '10px 12px',
+                color: '#eef2f8',
+                fontSize: 18,
+                fontFamily: "'Playfair Display',serif",
+                outline: 'none',
+                marginBottom: 8,
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={saveNickname}
+                disabled={savingNickname}
+                style={{
+                  flex: 1,
+                  padding: '8px 0',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: 'linear-gradient(135deg,#00d4b8,#00b89e)',
+                  color: '#07101f',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  fontFamily: O,
+                  cursor: savingNickname ? 'not-allowed' : 'pointer',
+                  opacity: savingNickname ? 0.6 : 1,
+                }}
+              >
+                {savingNickname ? 'Saving...' : 'Save'}
+              </button>
+              <button
+                onClick={() => {
+                  setEditingNickname(false);
+                  setNicknameError(null);
+                }}
+                disabled={savingNickname}
+                style={{
+                  flex: 1,
+                  padding: '8px 0',
+                  borderRadius: 8,
+                  border: '1px solid rgba(0,212,184,.2)',
+                  background: 'transparent',
+                  color: '#7a9bbf',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  fontFamily: O,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+            {nicknameError && (
+              <div
+                style={{
+                  marginTop: 8,
+                  fontSize: 11,
+                  color: '#e8526e',
+                }}
+              >
+                {nicknameError}
+              </div>
+            )}
+            <div
+              style={{
+                marginTop: 8,
+                fontFamily: T,
+                fontSize: 9,
+                color: '#7a9bbf',
+                lineHeight: 1.5,
+              }}
+            >
+              Leave blank to use the patient&apos;s real name.
+            </div>
+          </div>
+        ) : (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 4,
+              flexWrap: 'wrap',
+            }}
+          >
+            <span
+              style={{
+                fontFamily: "'Playfair Display',serif",
+                fontSize: 22,
+                color: '#eef2f8',
+              }}
+            >
+              {displayName}
+            </span>
+            <button
+              onClick={() => {
+                setNicknameDraft(myRow.patient_nickname ?? '');
+                setNicknameError(null);
+                setEditingNickname(true);
+              }}
+              aria-label="Edit nickname"
+              title="Set a nickname for the patient"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                color: '#7a9bbf',
+                padding: 4,
+                display: 'inline-flex',
+                alignItems: 'center',
+                lineHeight: 0,
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+                <path
+                  d="M11.3 2.7l2 2L5 13l-3 .5L2.5 11l8.8-8.3z"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            {myRow.patient_nickname && session.patient_name &&
+              myRow.patient_nickname.trim() !== session.patient_name.trim() && (
+                <span
+                  style={{
+                    fontFamily: T,
+                    fontSize: 9,
+                    color: '#7a9bbf',
+                    letterSpacing: '.04em',
+                  }}
+                >
+                  ({session.patient_name})
+                </span>
+              )}
+          </div>
+        )}
         <div
           style={{
             marginTop: 12,
