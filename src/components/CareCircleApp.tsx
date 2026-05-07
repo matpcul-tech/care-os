@@ -594,10 +594,12 @@ function PatientCard({
   session,
   shield,
   shieldLoading,
+  patientNickname,
 }: {
   session: CCSession;
   shield: ShieldPayload | null;
   shieldLoading: boolean;
+  patientNickname: string | null;
 }) {
   const score = shield ? Math.round(shield.risk_score) : 0;
   const scoreColor = score >= 75 ? OK : score >= 55 ? WARN : ALERT;
@@ -605,7 +607,7 @@ function PatientCard({
     ? 'Loading...'
     : shield?.risk_label || 'Not yet computed';
   const alerts = shield?.panel_flagged ?? 0;
-  const name = session.patient_name || 'Your loved one';
+  const name = patientNickname || session.patient_name || 'Your loved one';
   const initials = initialsFor(name);
   const tempEntry = flatBiomarker(shield?.biomarkers, 'body_temperature');
 
@@ -1916,6 +1918,40 @@ export default function CareCircleApp() {
 
   const { shield, err: shieldErr, loading: shieldLoading } = useShieldPolling(session);
 
+  // Pull patient_nickname for the authenticated member from care_circle.
+  // Each family member sets their own nickname via the FamilyPage editor;
+  // we read it on every CareCircleApp mount and on session change so a
+  // nickname saved on the dashboard surface shows up in the PatientCard
+  // here without requiring a fresh login.
+  const [patientNickname, setPatientNickname] = useState<string | null>(null);
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const valid = await ensureValidSession(session);
+        if (!valid || cancelled) return;
+        const r = await fetch(
+          `${SUPABASE_URL}/rest/v1/care_circle?member_user_id=eq.${valid.user_id}&select=patient_nickname&limit=1`,
+          {
+            headers: { apikey: ANON_KEY, Authorization: `Bearer ${valid.access_token}` },
+            cache: 'no-store',
+          },
+        );
+        if (!r.ok || cancelled) return;
+        const rows = (await r.json()) as Array<{ patient_nickname: string | null }>;
+        if (!cancelled) {
+          setPatientNickname(rows[0]?.patient_nickname ?? null);
+        }
+      } catch {
+        // Best-effort: if the column does not exist yet (migration not
+        // applied) or the request fails, fall back to session.patient_name
+        // in PatientCard.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
   const signOut = useCallback(() => {
     window.localStorage.removeItem('cc-session');
     router.push('/login');
@@ -1956,7 +1992,7 @@ export default function CareCircleApp() {
       default:
         return (
           <>
-            <PatientCard session={session} shield={shield} shieldLoading={shieldLoading} />
+            <PatientCard session={session} shield={shield} shieldLoading={shieldLoading} patientNickname={patientNickname} />
             <ActiveProtocols shield={shield} />
             <RiskDomains shield={shield} />
           </>
