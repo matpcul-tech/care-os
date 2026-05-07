@@ -605,7 +605,7 @@ function PatientCard({
     ? 'Loading...'
     : shield?.risk_label || 'Not yet computed';
   const alerts = shield?.panel_flagged ?? 0;
-  const name = session.patient_name || `Patient ${session.patient_id.slice(0, 8)}`;
+  const name = session.patient_name || 'Your loved one';
   const initials = initialsFor(name);
   const tempEntry = flatBiomarker(shield?.biomarkers, 'body_temperature');
 
