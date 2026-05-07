@@ -57,9 +57,6 @@ export default function EmergencyPage({ session }: { session: CCSession }) {
         <div style={{ fontSize: 18, fontWeight: 700, color: '#eef2f8', marginTop: 4 }}>
           {session.patient_name || 'Your loved one'}
         </div>
-        <div style={{ fontSize: 11, color: '#7a9bbf', marginTop: 2 }}>
-          Patient ref: {session.patient_id.slice(0, 8)}...
-        </div>
       </div>
 
       <div style={SECTION_LABEL}>You on this Care Circle</div>

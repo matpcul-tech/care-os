@@ -300,8 +300,7 @@ export default function FamilyPage() {
     );
   }
 
-  const patientRef = session.patient_id.slice(0, 8);
-  const patientName = session.patient_name;
+  const patientName = session.patient_name || 'Your loved one';
   const lastAlert = alerts[0];
 
   const vitalCells = vitals
@@ -376,10 +375,7 @@ export default function FamilyPage() {
             marginBottom: 4,
           }}
         >
-          {patientName ? patientName : `Patient ${patientRef}`}
-        </div>
-        <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf' }}>
-          Patient ref: {patientRef}...
+          {patientName}
         </div>
         <div
           style={{

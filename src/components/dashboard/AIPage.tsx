@@ -81,6 +81,8 @@ export default function AIPage({
     [input, msgs, loading, setMsgs, addLog, session.patient_id],
   );
 
+  const patientName = session.patient_name || 'Your loved one';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '12px 18px 0', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexShrink: 0 }}>
@@ -105,7 +107,7 @@ export default function AIPage({
         <div>
           <div style={{ fontSize: 13, fontWeight: 600 }}>CareCircle AI</div>
           <div style={{ fontFamily: T, fontSize: 9, color: '#00d4b8' }}>
-            Patient {session.patient_id.slice(0, 8)}... · Shield Active
+            {patientName} · Shield Active
           </div>
         </div>
       </div>

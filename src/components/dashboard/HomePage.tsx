@@ -50,8 +50,7 @@ export default function HomePage({
     };
   }, [session.access_token, session.patient_id, session.user_id]);
 
-  const patientName = session.patient_name;
-  const patientRef = session.patient_id.slice(0, 8);
+  const patientName = session.patient_name || 'Your loved one';
   const criticalCount = (alerts || []).filter((a) => a.severity === 'critical').length;
   const lastAlert = (alerts || [])[0];
 
@@ -67,31 +66,15 @@ export default function HomePage({
           marginBottom: 12,
         }}
       >
-        {patientName ? (
-          <div
-            style={{
-              fontFamily: "'Playfair Display',serif",
-              fontSize: 22,
-              color: '#eef2f8',
-              marginBottom: 4,
-            }}
-          >
-            {patientName}
-          </div>
-        ) : (
-          <div
-            style={{
-              fontFamily: "'Playfair Display',serif",
-              fontSize: 22,
-              color: '#eef2f8',
-              marginBottom: 4,
-            }}
-          >
-            Patient {patientRef}
-          </div>
-        )}
-        <div style={{ fontFamily: T, fontSize: 9, color: '#7a9bbf' }}>
-          Patient ref: {patientRef}...
+        <div
+          style={{
+            fontFamily: "'Playfair Display',serif",
+            fontSize: 22,
+            color: '#eef2f8',
+            marginBottom: 4,
+          }}
+        >
+          {patientName}
         </div>
         {me && (
           <div
