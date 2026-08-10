@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { decryptGCM } from "@/lib/vault-crypto";
-import { authVaultForFile } from "@/lib/vault-auth";
+import { authVaultForFile, canReadVault } from "@/lib/vault-auth";
+import { logPhiAccess, requestContext } from "@/lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +18,12 @@ export async function GET(
   const auth = await authVaultForFile(req, params.id);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.message }, { status: auth.status });
+  }
+  if (!canReadVault(auth.role)) {
+    return NextResponse.json(
+      { error: "your role cannot access documents" },
+      { status: 403 },
+    );
   }
 
   const r = await fetch(
@@ -58,6 +65,19 @@ export async function GET(
   } catch {
     return NextResponse.json({ error: "decrypt failed" }, { status: 500 });
   }
+
+  const ctx = requestContext(req.headers);
+  await logPhiAccess({
+    patientId: auth.patientId,
+    actorUserId: auth.userId,
+    actorRole: auth.role,
+    action: "download",
+    resourceType: "vault_file",
+    resourceId: params.id,
+    detail: { filename: file.filename, mime_type: file.mime_type },
+    ip: ctx.ip,
+    userAgent: ctx.userAgent,
+  });
 
   const safeName = file.filename.replace(/"/g, "");
   return new NextResponse(new Uint8Array(plain), {

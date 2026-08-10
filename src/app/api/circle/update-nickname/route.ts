@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
+
+const RATE_LIMIT = { name: 'update-nickname', max: 30, windowSeconds: 60 };
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -52,6 +55,10 @@ export async function POST(req: NextRequest) {
 
   const userId = await getUserId(token);
   if (!userId) return bad('authentication required', 401);
+
+  if (!(await checkRateLimit(RATE_LIMIT, userId))) {
+    return bad('rate limit exceeded, please slow down', 429);
+  }
 
   let body: UpdateBody;
   try {

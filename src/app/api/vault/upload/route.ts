@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { encryptGCM } from "@/lib/vault-crypto";
-import { authVault } from "@/lib/vault-auth";
+import { authVault, canWriteVault } from "@/lib/vault-auth";
+import { logPhiAccess, requestContext } from "@/lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +18,12 @@ export async function POST(req: NextRequest) {
   const auth = await authVault(req);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.message }, { status: auth.status });
+  }
+  if (!canWriteVault(auth.role)) {
+    return NextResponse.json(
+      { error: "your role cannot upload documents" },
+      { status: 403 },
+    );
   }
 
   const form = await req.formData().catch(() => null);
@@ -117,5 +124,19 @@ export async function POST(req: NextRequest) {
     size_bytes: number;
     uploaded_at: string;
   }>;
+
+  const ctx = requestContext(req.headers);
+  await logPhiAccess({
+    patientId: auth.patientId,
+    actorUserId: auth.userId,
+    actorRole: auth.role,
+    action: "upload",
+    resourceType: "vault_file",
+    resourceId: rows[0].id,
+    detail: { filename, mime_type: mime, size_bytes: buf.length },
+    ip: ctx.ip,
+    userAgent: ctx.userAgent,
+  });
+
   return NextResponse.json({ file: rows[0] });
 }

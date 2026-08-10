@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --import ./test/register.mjs --test test/*.test.mts"
   },
   "dependencies": {
     "lucide-react": "^0.383.0",

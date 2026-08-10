@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Heart } from 'lucide-react';
+import { validatePassword } from '@/lib/password-policy';
 
 const T = "'DM Mono',monospace";
 const O = "'Outfit',sans-serif";
@@ -116,8 +117,9 @@ function SignupInner() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       setSubmitErr('A valid email is required.'); return;
     }
-    if (password.length < 8) {
-      setSubmitErr('Password must be at least 8 characters.'); return;
+    const pw = validatePassword(password, { email: email.trim(), name: name.trim() });
+    if (!pw.ok) {
+      setSubmitErr(pw.reason || 'Password does not meet requirements.'); return;
     }
     setSubmitting(true);
     setSubmitErr(null);
@@ -263,7 +265,7 @@ function SignupInner() {
             <span style={label}>Email</span>
             <input style={input} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
 
-            <span style={label}>Password (8+ chars)</span>
+            <span style={label}>Password (12+ chars, mix of letters/numbers/symbols)</span>
             <input style={input} type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
 
             <span style={label}>Phone (for emergency SMS — optional)</span>
@@ -331,7 +333,7 @@ function SignupInner() {
             </button>
 
             <p style={{ marginTop: 14, fontSize: 11, color: '#7a9bbf', lineHeight: 1.6 }}>
-              By joining, you&apos;ll receive {alertLevel === 'critical' ? 'critical-only' : 'all'} health alerts about {invite.patient_name || 'your loved one'}. No raw values or PHI are included in alerts. Protected by the Sovereign Prompt Shield.
+              By joining, you&apos;ll receive {alertLevel === 'critical' ? 'critical-only' : 'all'} health alerts about {invite.patient_name || 'your loved one'}. Alerts name which metric crossed a threshold and what to do — not raw lab values. Sign in for full details.
             </p>
           </div>
         )}

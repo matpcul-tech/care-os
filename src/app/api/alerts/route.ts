@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { logPhiAccess, requestContext } from '@/lib/audit';
+import { checkRateLimit } from '@/lib/rate-limit';
+import { sendEmail } from '@/lib/providers/email';
+import { sendSms } from '@/lib/providers/sms';
 
 export const runtime = 'edge';
 
+const RATE_LIMIT = { name: 'alerts', max: 120, windowSeconds: 60 };
+
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const RESEND_API_KEY = process.env.RESEND_API_KEY!;
-const FROM_EMAIL =
-  process.env.RESEND_FROM_EMAIL || 'CareCircle <care@carecircle.health>';
-
-const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_FROM = process.env.TWILIO_FROM_NUMBER;
 
 const CAREIQ_ALERT_SIGNING_KEY = process.env.CAREIQ_ALERT_SIGNING_KEY;
 const SIGNATURE_MAX_AGE_SEC = 300;
@@ -208,10 +207,6 @@ async function sendAlertEmail(args: {
   patientId: string;
   flags: Flag[];
 }) {
-  if (!RESEND_API_KEY) {
-    return { sent: false as const, reason: 'RESEND_API_KEY not configured' };
-  }
-
   const hasCritical = args.flags.some((f) => f.severity === 'critical');
   const patientRef = args.patientId.slice(0, 8);
   const subject = hasCritical
@@ -239,56 +234,11 @@ async function sendAlertEmail(args: {
   <ul style="padding-left:18px;margin:12px 0">${items}</ul>
   <p style="font-size:12px;color:#666;margin-top:24px;padding-top:12px;border-top:1px solid #eee">
     Patient reference: <code>${args.patientId}</code><br>
-    No raw values or personal information are included. Sign in to CareCircle for full context.<br>
-    Protected by the Sovereign Prompt Shield.
+    This alert names the metric and guidance only — no raw lab values. Sign in to CareCircle for full context.
   </p>
 </div>`.trim();
 
-  const r = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ from: FROM_EMAIL, to: args.to, subject, html }),
-  });
-
-  if (!r.ok) {
-    return { sent: false as const, reason: `Resend ${r.status}: ${await r.text()}` };
-  }
-  const data = (await r.json()) as { id?: string };
-  return { sent: true as const, id: data.id ?? null };
-}
-
-async function sendSms(args: {
-  to: string;
-  body: string;
-}): Promise<{ sent: boolean; sid?: string | null; reason?: string }> {
-  if (!TWILIO_SID || !TWILIO_TOKEN || !TWILIO_FROM) {
-    return { sent: false, reason: 'TWILIO_* env not configured' };
-  }
-  const auth = btoa(`${TWILIO_SID}:${TWILIO_TOKEN}`);
-  const params = new URLSearchParams({
-    From: TWILIO_FROM,
-    To: args.to,
-    Body: args.body,
-  });
-  const r = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${auth}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params.toString(),
-    },
-  );
-  if (!r.ok) {
-    return { sent: false, reason: `Twilio ${r.status}: ${await r.text()}` };
-  }
-  const data = (await r.json()) as { sid?: string };
-  return { sent: true, sid: data.sid ?? null };
+  return sendEmail({ to: args.to, subject, html });
 }
 
 function buildSmsBody(patientRef: string, criticalFlags: Flag[]): string {
@@ -298,7 +248,7 @@ function buildSmsBody(patientRef: string, criticalFlags: Flag[]): string {
   for (const f of criticalFlags) {
     lines.push(`* ${f.metric}: ${f.recommendation}`);
   }
-  lines.push('Sign in to CareCircle for details. No PHI in this message.');
+  lines.push('Sign in to CareCircle for details. No lab values in this message.');
   const body = lines.join('\n');
   return body.length > 1500 ? `${body.slice(0, 1497)}...` : body;
 }
@@ -393,33 +343,40 @@ export async function POST(req: NextRequest) {
     const patientId = body.patient_id || body.patientId;
     if (!patientId) return bad('patient_id required');
 
-    // ----- Authenticate signed grade-change requests -----
-    if (body.panel_grade_change) {
-      if (!CAREIQ_ALERT_SIGNING_KEY) {
-        return bad('signing key not configured on care-os', 500);
-      }
-      const sigHeader = req.headers.get('x-alert-signature') || '';
-      const tsHeader = req.headers.get('x-alert-timestamp') || '';
-      if (!sigHeader || !tsHeader) {
-        return bad('signature and timestamp headers required for grade change', 401);
-      }
-      const ts = Number(tsHeader);
-      if (!Number.isFinite(ts)) {
-        return bad('invalid timestamp', 401);
-      }
-      const now = Math.floor(Date.now() / 1000);
-      if (Math.abs(now - ts) > SIGNATURE_MAX_AGE_SEC) {
-        return bad('signature stale', 401);
-      }
-      const ok = await verifyHmac(
-        CAREIQ_ALERT_SIGNING_KEY,
-        tsHeader,
-        rawBody,
-        sigHeader,
-      );
-      if (!ok) {
-        return bad('signature mismatch', 401);
-      }
+    // Throttle per patient to bound alert-dispatch floods.
+    if (!(await checkRateLimit(RATE_LIMIT, patientId))) {
+      return bad('rate limit exceeded, please slow down', 429);
+    }
+
+    // ----- Authenticate EVERY alert request via the CareIQ HMAC signature.
+    // Alerts fan out real emails and SMS to a patient's care circle, so every
+    // path (vitals thresholds and panel-grade changes alike) must be signed —
+    // not just grade changes. The signature covers the exact raw body, so it
+    // also authenticates patient_id and vitals against tampering/replay.
+    if (!CAREIQ_ALERT_SIGNING_KEY) {
+      return bad('signing key not configured on care-os', 500);
+    }
+    const sigHeader = req.headers.get('x-alert-signature') || '';
+    const tsHeader = req.headers.get('x-alert-timestamp') || '';
+    if (!sigHeader || !tsHeader) {
+      return bad('signature and timestamp headers required', 401);
+    }
+    const ts = Number(tsHeader);
+    if (!Number.isFinite(ts)) {
+      return bad('invalid timestamp', 401);
+    }
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - ts) > SIGNATURE_MAX_AGE_SEC) {
+      return bad('signature stale', 401);
+    }
+    const ok = await verifyHmac(
+      CAREIQ_ALERT_SIGNING_KEY,
+      tsHeader,
+      rawBody,
+      sigHeader,
+    );
+    if (!ok) {
+      return bad('signature mismatch', 401);
     }
 
     // ----- Build flags from vitals threshold + grade change -----
@@ -505,6 +462,26 @@ export async function POST(req: NextRequest) {
       delivery,
       smsDelivery,
       firedAt: sentAt,
+    });
+
+    // Audit the outbound dispatch (system-originated; no end-user actor).
+    const emailsSent = delivery.filter((d) => d.sent).length;
+    const smsSent = smsDelivery.filter((s) => s.sent).length;
+    const ctx = requestContext(req.headers);
+    await logPhiAccess({
+      patientId,
+      actorUserId: null,
+      actorRole: 'system',
+      action: 'alert_sent',
+      resourceType: 'alert',
+      detail: {
+        metrics: flags.map((f) => f.metric),
+        severities: flags.map((f) => f.severity),
+        emails_sent: emailsSent,
+        sms_sent: smsSent,
+      },
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
     });
 
     return NextResponse.json({

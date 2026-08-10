@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
+
+const RATE_LIMIT = { name: 'generate-invite', max: 20, windowSeconds: 60 };
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -10,6 +13,9 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://care-os-uo7x.vercel.
 const ALERT_LEVELS = ['critical', 'informational'] as const;
 type AlertLevel = (typeof ALERT_LEVELS)[number];
 
+const CARE_ROLES = ['admin', 'caregiver', 'viewer'] as const;
+type CareRole = (typeof CARE_ROLES)[number];
+
 // Unambiguous alphabet — no 0/O/1/I.
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -17,6 +23,7 @@ interface GenerateInviteBody {
   patient_name?: string;
   suggested_relationship?: string;
   suggested_alert_level?: string;
+  suggested_role?: string;
   expires_in_days?: number;
 }
 
@@ -72,6 +79,10 @@ export async function POST(req: NextRequest) {
     const user = await getUserFromAuthHeader(req);
     if (!user) return bad('authentication required', 401);
 
+    if (!(await checkRateLimit(RATE_LIMIT, user.id))) {
+      return bad('rate limit exceeded, please slow down', 429);
+    }
+
     let body: GenerateInviteBody = {};
     try {
       body = (await req.json()) as GenerateInviteBody;
@@ -86,6 +97,13 @@ export async function POST(req: NextRequest) {
       return bad('suggested_alert_level must be "critical" or "informational"');
     }
     const suggested_alert_level = rawLevel as AlertLevel;
+
+    // Optional least-privilege role the family member will receive on redeem.
+    const rawRole = (body.suggested_role || 'caregiver').trim();
+    if (!CARE_ROLES.includes(rawRole as CareRole)) {
+      return bad('suggested_role must be "admin", "caregiver", or "viewer"');
+    }
+    const suggested_role = rawRole as CareRole;
 
     const meta = (user.user_metadata || {}) as Record<string, unknown>;
     const patient_name =
@@ -117,6 +135,7 @@ export async function POST(req: NextRequest) {
             patient_name,
             suggested_relationship,
             suggested_alert_level,
+            suggested_role,
             expires_at,
           },
         ]),

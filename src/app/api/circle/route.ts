@@ -1,15 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { bearerToken, getUserId, isPatientOrMember } from '@/lib/api-auth';
+import { checkRateLimit, clientIp } from '@/lib/rate-limit';
+import { sendEmail } from '@/lib/providers/email';
 
 export const runtime = 'edge';
 
+const RATE_LIMIT = { name: 'circle', max: 60, windowSeconds: 60 };
+
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const RESEND_API_KEY = process.env.RESEND_API_KEY!;
-const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'CareCircle <care@carecircle.health>';
+
+/**
+ * Resolve the caller and confirm they may operate on `patientId`. Returns an
+ * error NextResponse to short-circuit with, or null when authorized.
+ */
+async function authorizeForPatient(
+  req: NextRequest,
+  patientId: string,
+): Promise<NextResponse | null> {
+  const userId = await getUserId(bearerToken(req));
+  if (!userId) return bad('authentication required', 401);
+  if (!(await isPatientOrMember(userId, patientId))) {
+    return bad('forbidden', 403);
+  }
+  return null;
+}
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://care-os.vercel.app';
 
 const ALERT_LEVELS = ['critical', 'informational'] as const;
 type AlertLevel = (typeof ALERT_LEVELS)[number];
+
+const CARE_ROLES = ['admin', 'caregiver', 'viewer'] as const;
+type CareRole = (typeof CARE_ROLES)[number];
 
 interface AddMemberBody {
   patient_id?: string;
@@ -18,6 +40,8 @@ interface AddMemberBody {
   member_name?: string;
   relationship?: string;
   alert_level?: string;
+  care_role?: string;
+  role?: string;
   patient_name?: string;
 }
 
@@ -55,10 +79,6 @@ async function sendInviteEmail(args: {
   relationship: string;
   alertLevel: AlertLevel;
 }) {
-  if (!RESEND_API_KEY) {
-    return { sent: false, reason: 'RESEND_API_KEY not configured' };
-  }
-
   const subject = `You've been invited to ${args.patientName}'s Care Circle`;
   const cadence =
     args.alertLevel === 'critical'
@@ -77,31 +97,25 @@ async function sendInviteEmail(args: {
     </a>
   </p>
   <p style="font-size:12px;color:#666;margin-top:24px">
-    Sent by CareCircle, protected by the Sovereign Prompt Shield. Alerts never include raw PHI.
+    Sent by CareCircle. Health alerts name the metric and guidance only — never raw lab values.
   </p>
 </div>`.trim();
 
-  const r = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ from: FROM_EMAIL, to: args.to, subject, html }),
-  });
-
-  if (!r.ok) {
-    return { sent: false, reason: `Resend ${r.status}: ${await r.text()}` };
-  }
-  const data = (await r.json()) as { id?: string };
-  return { sent: true, id: data.id ?? null };
+  return sendEmail({ to: args.to, subject, html });
 }
 
 export async function GET(req: NextRequest) {
   try {
+    if (!(await checkRateLimit(RATE_LIMIT, clientIp(req)))) {
+      return bad('rate limit exceeded, please slow down', 429);
+    }
+
     const url = new URL(req.url);
     const patientId = url.searchParams.get('patient_id') || url.searchParams.get('patientId');
     if (!patientId) return bad('patient_id required');
+
+    const denied = await authorizeForPatient(req, patientId);
+    if (denied) return denied;
 
     const r = await sb(
       'GET',
@@ -118,12 +132,17 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    if (!(await checkRateLimit(RATE_LIMIT, clientIp(req)))) {
+      return bad('rate limit exceeded, please slow down', 429);
+    }
+
     const body = (await req.json()) as AddMemberBody;
     const patientId = body.patient_id || body.patientId;
     const member_email = (body.member_email || '').trim().toLowerCase();
     const member_name = (body.member_name || '').trim();
     const relationship = (body.relationship || '').trim();
     const alert_level = ((body.alert_level || 'informational').trim() as AlertLevel);
+    const care_role = ((body.care_role || body.role || 'caregiver').trim() as CareRole);
 
     if (!patientId) return bad('patient_id required');
     if (!isEmail(member_email)) return bad('valid member_email required');
@@ -132,11 +151,17 @@ export async function POST(req: NextRequest) {
     if (!ALERT_LEVELS.includes(alert_level)) {
       return bad('alert_level must be "critical" or "informational"');
     }
+    if (!CARE_ROLES.includes(care_role)) {
+      return bad('care_role must be "admin", "caregiver", or "viewer"');
+    }
+
+    const denied = await authorizeForPatient(req, patientId);
+    if (denied) return denied;
 
     const insertRes = await sb(
       'POST',
       'care_circle',
-      [{ patient_id: patientId, member_email, member_name, relationship, alert_level }],
+      [{ patient_id: patientId, member_email, member_name, relationship, alert_level, care_role }],
       'return=representation',
     );
 

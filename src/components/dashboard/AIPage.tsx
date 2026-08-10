@@ -42,7 +42,10 @@ export default function AIPage({
       try {
         const res = await fetch('/api/shield', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
           body: JSON.stringify({ messages: newMsgs, patientId: session.patient_id }),
         });
         if (!res.ok) throw new Error('shield error');
@@ -157,8 +160,10 @@ export default function AIPage({
               lineHeight: 1.6,
             }}
           >
-            Ask anything about the alerts you have received. Every message is sanitized through the
-            Sovereign Prompt Shield before reaching the model.
+            Ask anything about the alerts you have received. Before each message reaches the AI
+            model, the server redacts common identifiers (Social Security numbers, phone numbers,
+            dates of birth). This isn&apos;t full de-identification, so avoid sharing details you
+            don&apos;t need to.
           </div>
         )}
         {msgs.map((m, i) => (

@@ -35,9 +35,10 @@ export default function ShieldPage({ logs }: { logs: ShieldLog[] }) {
           </span>
         </div>
         <div style={{ fontSize: 11, color: '#7a9bbf', lineHeight: 1.65 }}>
-          Every AI query you send through this dashboard is sanitized by the Sovereign Prompt Shield
-          before it reaches an external model. PHI patterns are replaced with protected tokens at the
-          server. Risk score and action are returned alongside the response.
+          Before an AI query reaches the external model, the server redacts common identifier
+          patterns — Social Security numbers, phone numbers, dates of birth, medical record numbers,
+          and dates. This reduces exposure but is not full de-identification: names and clinical
+          details may remain. A risk score and action are returned alongside each response.
         </div>
       </div>
 
@@ -54,7 +55,7 @@ export default function ShieldPage({ logs }: { logs: ShieldLog[] }) {
             color: '#7a9bbf',
           }}
         >
-          No queries yet. Use the AI tab to see Shield protection in real time.
+          No queries yet. Use the AI tab to see identifier redaction in real time.
         </div>
       ) : (
         logs.map((log, i) => (

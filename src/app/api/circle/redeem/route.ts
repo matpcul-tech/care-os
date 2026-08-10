@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { checkRateLimit, clientIp } from '@/lib/rate-limit';
+import { validatePassword } from '@/lib/password-policy';
 
 export const runtime = 'edge';
+
+// Invite codes are 8 chars from a 32-char alphabet. Rate-limit by IP to make
+// brute-forcing a valid code over the validate (GET) and redeem (POST)
+// endpoints impractical.
+const RL_GET = { name: 'redeem-get', max: 30, windowSeconds: 60 };
+const RL_POST = { name: 'redeem-post', max: 10, windowSeconds: 60 };
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -8,6 +16,9 @@ const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 const ALERT_LEVELS = ['critical', 'informational'] as const;
 type AlertLevel = (typeof ALERT_LEVELS)[number];
+
+const CARE_ROLES = ['admin', 'caregiver', 'viewer'] as const;
+type CareRole = (typeof CARE_ROLES)[number];
 
 interface RedeemBody {
   code?: string;
@@ -17,6 +28,8 @@ interface RedeemBody {
   member_phone?: string;
   relationship?: string;
   alert_level?: string;
+  care_role?: string;
+  role?: string;
 }
 
 interface InviteRow {
@@ -26,6 +39,7 @@ interface InviteRow {
   patient_name: string | null;
   suggested_relationship: string | null;
   suggested_alert_level: AlertLevel | null;
+  suggested_role: CareRole | null;
   expires_at: string;
   used_at: string | null;
   revoked_at: string | null;
@@ -91,6 +105,55 @@ function inviteUsable(invite: InviteRow): { ok: true } | { ok: false; reason: st
   return { ok: true };
 }
 
+// Atomically claim an invite: a single conditional UPDATE that flips
+// used_at from null -> now(), matching only rows that are still unused and
+// unrevoked. PostgREST applies the WHERE-clause server-side, so of N
+// concurrent redemptions exactly one gets a non-empty representation back
+// and the rest see zero rows. This is the compare-and-set that closes the
+// check-then-act race where two requests both pass inviteUsable() before
+// either marks the code used. Returns 'claimed' for the winner, 'already'
+// for losers/duplicates, and 'error' on any transport/DB failure.
+async function claimInvite(
+  inviteId: string,
+  usedAt: string,
+): Promise<'claimed' | 'already' | 'error'> {
+  const r = await fetch(
+    `${SUPABASE_URL}/rest/v1/care_circle_invites` +
+      `?id=eq.${encodeURIComponent(inviteId)}&used_at=is.null&revoked_at=is.null`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: SERVICE_ROLE,
+        Authorization: `Bearer ${SERVICE_ROLE}`,
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify({ used_at: usedAt }),
+    },
+  );
+  if (!r.ok) return 'error';
+  const rows = (await r.json().catch(() => [])) as unknown[];
+  return Array.isArray(rows) && rows.length > 0 ? 'claimed' : 'already';
+}
+
+// Release a claim we took but could not complete (e.g. the auth-user
+// creation or circle insert failed), so the code stays usable for a retry.
+// Best-effort: a failure here only means the code remains consumed.
+async function releaseInvite(inviteId: string): Promise<void> {
+  await fetch(
+    `${SUPABASE_URL}/rest/v1/care_circle_invites?id=eq.${encodeURIComponent(inviteId)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: SERVICE_ROLE,
+        Authorization: `Bearer ${SERVICE_ROLE}`,
+      },
+      body: JSON.stringify({ used_at: null, used_by: null }),
+    },
+  ).catch(() => {});
+}
+
 // Backfill patient_name when the invite row was written with null. The
 // patient is a Supabase auth user (CareIQ schema: patients.id = auth.uid()),
 // and the patients table itself stores only an AES-256-GCM-encrypted
@@ -146,6 +209,10 @@ export async function GET(req: NextRequest) {
       return bad('server misconfigured', 500, { env: envErr });
     }
 
+    if (!(await checkRateLimit(RL_GET, clientIp(req)))) {
+      return bad('rate limit exceeded, please slow down', 429);
+    }
+
     const url = new URL(req.url);
     const code = (url.searchParams.get('code') || '').trim().toUpperCase();
     if (!code) return bad('code required');
@@ -194,6 +261,10 @@ export async function POST(req: NextRequest) {
       return bad('server misconfigured', 500, { env: envErr });
     }
 
+    if (!(await checkRateLimit(RL_POST, clientIp(req)))) {
+      return bad('rate limit exceeded, please slow down', 429);
+    }
+
     const body = (await req.json()) as RedeemBody;
     const code = (body.code || '').trim().toUpperCase();
     const email = (body.email || '').trim().toLowerCase();
@@ -205,8 +276,9 @@ export async function POST(req: NextRequest) {
 
     if (!code) return bad('code required');
     if (!isEmail(email)) return bad('valid email required');
-    if (password.length < 8) return bad('password must be at least 8 characters');
     if (!member_name) return bad('member_name required');
+    const pw = validatePassword(password, { email, name: member_name });
+    if (!pw.ok) return bad(pw.reason || 'password does not meet requirements');
 
     const { invite, status, bodyText } = await lookupInvite(code);
     if (status !== 200) {
@@ -234,6 +306,30 @@ export async function POST(req: NextRequest) {
       return bad('alert_level must be "critical" or "informational"');
     }
 
+    // Resolve the member's access role. The invite's suggested_role (set by
+    // the patient) is authoritative; a client-supplied role may only NARROW
+    // it, never escalate — so a viewer invite can't be redeemed as an admin.
+    const suggestedRole: CareRole = invite.suggested_role || 'caregiver';
+    const requestedRole = (body.care_role || body.role || '').trim() as CareRole;
+    const RANK: Record<CareRole, number> = { viewer: 0, caregiver: 1, admin: 2 };
+    let finalRole: CareRole = suggestedRole;
+    if (CARE_ROLES.includes(requestedRole) && RANK[requestedRole] < RANK[suggestedRole]) {
+      finalRole = requestedRole;
+    }
+
+    // Atomically claim the invite BEFORE creating any account. inviteUsable()
+    // above is only an early, friendly-error check; this conditional UPDATE
+    // is the authority on single-use. If we lose the race (or the code was
+    // already redeemed), stop here — no user is created.
+    const claimedAt = new Date().toISOString();
+    const claim = await claimInvite(invite.id, claimedAt);
+    if (claim === 'error') {
+      return bad('lookup failed', 502);
+    }
+    if (claim === 'already') {
+      return bad('invite has already been redeemed', 410);
+    }
+
     const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
       method: 'POST',
       headers: {
@@ -251,6 +347,9 @@ export async function POST(req: NextRequest) {
 
     if (!createRes.ok) {
       const txt = await createRes.text();
+      // The redemption did not consume the invite — release our claim so the
+      // code can be retried (e.g. with a different email).
+      await releaseInvite(invite.id);
       if (
         createRes.status === 422 ||
         txt.includes('already been registered') ||
@@ -287,6 +386,7 @@ export async function POST(req: NextRequest) {
           member_phone,
           relationship: finalRelationship,
           alert_level: finalAlertLevel,
+          care_role: finalRole,
           invite_id: invite.id,
         },
       ]),
@@ -298,6 +398,8 @@ export async function POST(req: NextRequest) {
         method: 'DELETE',
         headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
       });
+      // Roll back the claim too so the invite is reusable after this failure.
+      await releaseInvite(invite.id);
       console.error('[redeem POST] circle insert', insertRes.status, txt.slice(0, 240));
       return bad('circle insert failed', 500, {
         supabase_status: insertRes.status,
@@ -324,6 +426,8 @@ export async function POST(req: NextRequest) {
       ).catch(() => {});
     }
 
+    // used_at was already set atomically at claim time; just record who
+    // redeemed it. Best-effort — the invite is already consumed either way.
     await fetch(
       `${SUPABASE_URL}/rest/v1/care_circle_invites?id=eq.${invite.id}`,
       {
@@ -333,12 +437,9 @@ export async function POST(req: NextRequest) {
           apikey: SERVICE_ROLE,
           Authorization: `Bearer ${SERVICE_ROLE}`,
         },
-        body: JSON.stringify({
-          used_at: new Date().toISOString(),
-          used_by: newUser.id,
-        }),
+        body: JSON.stringify({ used_by: newUser.id }),
       },
-    );
+    ).catch(() => {});
 
     const tokenRes = await fetch(
       `${SUPABASE_URL}/auth/v1/token?grant_type=password`,

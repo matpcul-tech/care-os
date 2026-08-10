@@ -295,9 +295,9 @@ export default function LandingPage() {
             <div style={{ background:'rgba(74,222,128,.05)', border:'1px solid rgba(74,222,128,.2)', borderRadius:16, padding:'24px 28px', display:'flex', alignItems:'flex-start', gap:16 }}>
               <Shield size={24} color="#4ade80" style={{ flexShrink:0, marginTop:2 }}/>
               <div>
-                <div style={{ fontSize:14, fontWeight:700, color:'#4ade80', marginBottom:6 }}>Your family&apos;s information is private and protected</div>
+                <div style={{ fontSize:14, fontWeight:700, color:'#4ade80', marginBottom:6 }}>Your family&apos;s information is handled with care</div>
                 <div style={{ fontSize:13, color:'#7a9bbf', lineHeight:1.7 }}>
-                  CareCircle uses the Sovereign Prompt Shield to protect your loved one&apos;s data. All patient information is encrypted before it is processed by AI. Your family&apos;s health information is never sold and never reaches a commercial server in readable form. Patient data protected.
+                  Uploaded documents are encrypted (AES-256-GCM) at rest, access is role-scoped and audit-logged, and common identifiers like Social Security and phone numbers are redacted from AI prompts before they leave our servers. AI requests are processed by a third-party model provider over encrypted connections. We never sell your family&apos;s health information.
                 </div>
               </div>
             </div>

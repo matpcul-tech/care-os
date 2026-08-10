@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { T, O, PAGE_PAD, SECTION_LABEL, CARD_BG, CARD_BORDER } from './ui';
+import MfaCard from './MfaCard';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -29,9 +30,17 @@ interface CareCircleRow {
   member_phone: string | null;
   relationship: string;
   alert_level: Severity;
+  care_role: 'admin' | 'caregiver' | 'viewer' | null;
   patient_nickname: string | null;
   created_at: string;
 }
+
+// What each role can do, shown to the member so access limits are legible.
+const ROLE_LABEL: Record<'admin' | 'caregiver' | 'viewer', string> = {
+  admin: 'Admin · full access',
+  caregiver: 'Caregiver · edit, no delete',
+  viewer: 'Viewer · read-only',
+};
 
 interface AlertRow {
   id: string;
@@ -602,30 +611,52 @@ export default function FamilyPage() {
             </div>
             <div style={{ fontSize: 11, color: '#7a9bbf' }}>{myRow.relationship}</div>
           </div>
-          <div
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              alignSelf: 'flex-start',
-              gap: 4,
-              fontFamily: T,
-              fontSize: 9,
-              padding: '4px 10px',
-              borderRadius: 8,
-              background:
-                myRow.alert_level === 'critical'
-                  ? 'rgba(232,82,110,.12)'
-                  : 'rgba(0,212,184,.1)',
-              color: myRow.alert_level === 'critical' ? '#e8526e' : '#00d4b8',
-              border: `1px solid ${myRow.alert_level === 'critical' ? 'rgba(232,82,110,.3)' : 'rgba(0,212,184,.2)'}`,
-              textTransform: 'uppercase',
-              letterSpacing: '.1em',
-            }}
-          >
-            {myRow.alert_level === 'critical' ? 'Critical only' : 'All alerts'}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                alignSelf: 'flex-start',
+                gap: 4,
+                fontFamily: T,
+                fontSize: 9,
+                padding: '4px 10px',
+                borderRadius: 8,
+                background:
+                  myRow.alert_level === 'critical'
+                    ? 'rgba(232,82,110,.12)'
+                    : 'rgba(0,212,184,.1)',
+                color: myRow.alert_level === 'critical' ? '#e8526e' : '#00d4b8',
+                border: `1px solid ${myRow.alert_level === 'critical' ? 'rgba(232,82,110,.3)' : 'rgba(0,212,184,.2)'}`,
+                textTransform: 'uppercase',
+                letterSpacing: '.1em',
+              }}
+            >
+              {myRow.alert_level === 'critical' ? 'Critical only' : 'All alerts'}
+            </div>
+            <div
+              style={{
+                fontFamily: T,
+                fontSize: 9,
+                padding: '4px 10px',
+                borderRadius: 8,
+                background: 'rgba(128,96,204,.12)',
+                color: '#b6a4e8',
+                border: '1px solid rgba(128,96,204,.3)',
+                textTransform: 'uppercase',
+                letterSpacing: '.1em',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {ROLE_LABEL[myRow.care_role ?? 'caregiver']}
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Account security: two-factor authentication */}
+      <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Account security</div>
+      <MfaCard session={session} />
 
       {/* Vitals row from CareIQ Shield */}
       <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Latest vitals</div>
