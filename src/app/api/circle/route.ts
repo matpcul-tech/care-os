@@ -1,9 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { bearerToken, getUserId, isPatientOrMember } from '@/lib/api-auth';
 
 export const runtime = 'edge';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+/**
+ * Resolve the caller and confirm they may operate on `patientId`. Returns an
+ * error NextResponse to short-circuit with, or null when authorized.
+ */
+async function authorizeForPatient(
+  req: NextRequest,
+  patientId: string,
+): Promise<NextResponse | null> {
+  const userId = await getUserId(bearerToken(req));
+  if (!userId) return bad('authentication required', 401);
+  if (!(await isPatientOrMember(userId, patientId))) {
+    return bad('forbidden', 403);
+  }
+  return null;
+}
 const RESEND_API_KEY = process.env.RESEND_API_KEY!;
 const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'CareCircle <care@carecircle.health>';
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://care-os.vercel.app';
@@ -103,6 +120,9 @@ export async function GET(req: NextRequest) {
     const patientId = url.searchParams.get('patient_id') || url.searchParams.get('patientId');
     if (!patientId) return bad('patient_id required');
 
+    const denied = await authorizeForPatient(req, patientId);
+    if (denied) return denied;
+
     const r = await sb(
       'GET',
       `care_circle?patient_id=eq.${encodeURIComponent(patientId)}&order=created_at.desc`,
@@ -132,6 +152,9 @@ export async function POST(req: NextRequest) {
     if (!ALERT_LEVELS.includes(alert_level)) {
       return bad('alert_level must be "critical" or "informational"');
     }
+
+    const denied = await authorizeForPatient(req, patientId);
+    if (denied) return denied;
 
     const insertRes = await sb(
       'POST',

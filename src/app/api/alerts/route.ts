@@ -393,33 +393,35 @@ export async function POST(req: NextRequest) {
     const patientId = body.patient_id || body.patientId;
     if (!patientId) return bad('patient_id required');
 
-    // ----- Authenticate signed grade-change requests -----
-    if (body.panel_grade_change) {
-      if (!CAREIQ_ALERT_SIGNING_KEY) {
-        return bad('signing key not configured on care-os', 500);
-      }
-      const sigHeader = req.headers.get('x-alert-signature') || '';
-      const tsHeader = req.headers.get('x-alert-timestamp') || '';
-      if (!sigHeader || !tsHeader) {
-        return bad('signature and timestamp headers required for grade change', 401);
-      }
-      const ts = Number(tsHeader);
-      if (!Number.isFinite(ts)) {
-        return bad('invalid timestamp', 401);
-      }
-      const now = Math.floor(Date.now() / 1000);
-      if (Math.abs(now - ts) > SIGNATURE_MAX_AGE_SEC) {
-        return bad('signature stale', 401);
-      }
-      const ok = await verifyHmac(
-        CAREIQ_ALERT_SIGNING_KEY,
-        tsHeader,
-        rawBody,
-        sigHeader,
-      );
-      if (!ok) {
-        return bad('signature mismatch', 401);
-      }
+    // ----- Authenticate EVERY alert request via the CareIQ HMAC signature.
+    // Alerts fan out real emails and SMS to a patient's care circle, so every
+    // path (vitals thresholds and panel-grade changes alike) must be signed —
+    // not just grade changes. The signature covers the exact raw body, so it
+    // also authenticates patient_id and vitals against tampering/replay.
+    if (!CAREIQ_ALERT_SIGNING_KEY) {
+      return bad('signing key not configured on care-os', 500);
+    }
+    const sigHeader = req.headers.get('x-alert-signature') || '';
+    const tsHeader = req.headers.get('x-alert-timestamp') || '';
+    if (!sigHeader || !tsHeader) {
+      return bad('signature and timestamp headers required', 401);
+    }
+    const ts = Number(tsHeader);
+    if (!Number.isFinite(ts)) {
+      return bad('invalid timestamp', 401);
+    }
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - ts) > SIGNATURE_MAX_AGE_SEC) {
+      return bad('signature stale', 401);
+    }
+    const ok = await verifyHmac(
+      CAREIQ_ALERT_SIGNING_KEY,
+      tsHeader,
+      rawBody,
+      sigHeader,
+    );
+    if (!ok) {
+      return bad('signature mismatch', 401);
     }
 
     // ----- Build flags from vitals threshold + grade change -----

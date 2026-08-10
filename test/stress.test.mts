@@ -13,53 +13,52 @@ const redeem = await import("../src/app/api/circle/redeem/route.ts");
 const stub = new FetchStub();
 stub.install();
 
-// DoS: serverScan() sanitizes via `matches.forEach(m => sanitized =
-// sanitized.replace(m, token))`, which is O(matches x length). A body of
-// repeated dates ("12/34/") yields ~n/6 matches over a length-n string,
-// so the cost grows quadratically. /api/shield has NO auth and NO input
-// size cap, so a single ~250 KB anonymous request pins a CPU for seconds.
-// This test documents the blowup deterministically: a date-dense payload
-// costs dramatically more than a same-length benign payload, and doubling
-// the date payload far more than doubles the time (super-linear).
-test("STRESS/DoS: shield PII scan is quadratic on date-dense input (unauthenticated)", async () => {
+const AUTH = { authorization: "Bearer good" };
+function shieldReady() {
   stub.reset();
+  stub.on("/auth/v1/user", () => ({ json: { id: "member-1" } }));
   stub.on("api.anthropic.com", () => ({ json: { content: [{ text: "ok" }] } }));
+}
+function shieldReq(content: string) {
+  return makeReq("https://care/api/shield", {
+    method: "POST",
+    headers: AUTH,
+    body: JSON.stringify({ messages: [{ role: "user", content }] }),
+  });
+}
 
-  const time = async (content: string) => {
-    const t = Date.now();
-    const res = await shield.POST(
-      makeReq("https://care/api/shield", { method: "POST", body: JSON.stringify({ messages: [{ role: "user", content }] }) }),
-    );
+// F1 fix verification. The old serverScan() sanitized via
+// `matches.forEach(m => sanitized.replace(m, token))` — O(matches x length),
+// quadratic on date-dense input — and /api/shield had no input cap, so a
+// ~250 KB anonymous body pinned a CPU for tens of seconds. The fix caps each
+// message to 8000 chars and does one linear regex.replace() per pattern.
+// This test asserts the blowup is gone: even a 1 MB date-dense body returns
+// quickly and stays well under any human-perceptible ceiling.
+test("F1 fixed: date-dense 1 MB body scans fast (no quadratic DoS)", async () => {
+  shieldReady();
+  const t = Date.now();
+  const res = await shield.POST(shieldReq("12/34/".repeat(170_000))); // ~1 MB
+  const { status } = await readJson(res);
+  const elapsed = Date.now() - t;
+  assert.equal(status, 200);
+  assert.ok(elapsed < 250, `scan took ${elapsed}ms — expected fast, bounded work`);
+});
+
+test("F1 fixed: 200 large date-dense requests stay fast in aggregate", async () => {
+  shieldReady();
+  const t = Date.now();
+  for (let i = 0; i < 200; i++) {
+    const res = await shield.POST(shieldReq("01/02/1990 ".repeat(5000)));
     await readJson(res);
-    return Date.now() - t;
-  };
-
-  const benign = await time("1".repeat(240_000)); // same length, ~no matches
-  const dates40k = await time("12/34/".repeat(40_000)); // 240 KB, ~40k matches
-  const dates20k = await time("12/34/".repeat(20_000)); // 120 KB, ~20k matches
-
-  // Input-dependent blowup: identical length, wildly different cost.
-  assert.ok(
-    dates40k > benign * 20,
-    `date-dense (${dates40k}ms) should dwarf same-length benign (${benign}ms) — confirms input-triggered DoS`,
-  );
-  // Super-linear: 2x the matches costs far more than 2x the time.
-  assert.ok(
-    dates40k > dates20k * 3,
-    `doubling matches took ${dates20k}ms -> ${dates40k}ms (>3x) — confirms quadratic complexity`,
-  );
+  }
+  const elapsed = Date.now() - t;
+  assert.ok(elapsed < 3000, `200 requests took ${elapsed}ms — expected bounded per-request work`);
 });
 
 test("STRESS: shield stays correct across 500 mixed-PII messages", async () => {
-  stub.reset();
-  stub.on("api.anthropic.com", () => ({ json: { content: [{ text: "ok" }] } }));
+  shieldReady();
   for (let i = 0; i < 500; i++) {
-    const res = await shield.POST(
-      makeReq("https://care/api/shield", {
-        method: "POST",
-        body: JSON.stringify({ messages: [{ role: "user", content: `patient ${i} ssn 111-22-3333 dob: 01/02/1944` }] }),
-      }),
-    );
+    const res = await shield.POST(shieldReq(`patient ${i} ssn 111-22-3333 dob: 01/02/1944`));
     const { body } = await readJson(res);
     assert.ok(body.shield.flags.includes("SSN"));
     assert.ok(body.shield.riskScore >= 40);

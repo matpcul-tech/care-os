@@ -46,7 +46,42 @@ import `next/server` and the `@/` alias — load unmodified.
 - **update-nickname** (`update-nickname.test.mts`): requires a valid JWT,
   scopes the PATCH to the caller's own `member_user_id`, clamps to 60 chars.
 
-## Findings (verified by test)
+## Fixes applied (F1–F4, plus F6)
+
+All four requested items are fixed and the tests now assert the *fixed*
+behavior (73/73 passing, `tsc` clean, `next build` clean).
+
+- **F1 — CRITICAL DoS: fixed.** `serverScan()` now does one linear
+  `regex.replace(pattern, token)` pass per pattern instead of a per-match
+  `String.replace` loop, and `/api/shield` caps input to 40 messages ×
+  8000 chars. Measured on the same 600 KB date-dense payload: **~33,000 ms →
+  22 ms** from the algorithm alone, and ~0 ms after the length cap. Tests:
+  `stress.test.mts` (`F1 fixed: …`).
+- **F2 — shield auth: fixed.** `/api/shield` now requires a valid Supabase
+  JWT (`getUserId`); anonymous or bad-token requests get 401 and never reach
+  the Anthropic API. `AIPage` sends `Authorization: Bearer <access_token>`.
+- **F3 — circle auth: fixed.** `/api/circle` GET and POST require a JWT and
+  authorize via `isPatientOrMember(userId, patientId)` (the code analog of
+  the SQL `is_patient_or_member` policy). Non-authenticated → 401,
+  non-member → 403.
+- **F4 — alerts auth: fixed.** The CareIQ HMAC signature is now mandatory on
+  **every** alert request (vitals and grade-change alike), covering the exact
+  raw body. Unsigned/tampered/stale → 401, no email or SMS fan-out.
+- **F6 — shield sanitization: fixed (bonus).** Every user-role message is
+  scanned and sanitized, not just the last, so PHI in earlier turns no longer
+  reaches the model.
+
+Shared auth helpers live in `src/lib/api-auth.ts`.
+
+> **Integration note:** F4 makes signing mandatory for the vitals path. If
+> the CareIQ caller only signed grade-change requests before, it must now
+> sign vitals requests too (same `ts + ":" + rawBody` HMAC-SHA256 with
+> `CAREIQ_ALERT_SIGNING_KEY`). This is the intended security posture.
+
+**F5 (invite-redemption TOCTOU) was NOT in scope for this fix** and remains
+open; its documenting test still passes.
+
+## Findings (as originally verified by test)
 
 ### F1 — CRITICAL: `/api/shield` quadratic-complexity DoS, unauthenticated
 `serverScan()` sanitizes with `matches.forEach(m => sanitized =

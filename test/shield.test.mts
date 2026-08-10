@@ -3,29 +3,54 @@ import assert from "node:assert/strict";
 import { FetchStub, makeReq, readJson } from "./harness.mts";
 
 process.env.ANTHROPIC_API_KEY = "sk-test";
+process.env.NEXT_PUBLIC_SUPABASE_URL = "https://sb.test";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
 
 const { POST } = await import("../src/app/api/shield/route.ts");
 
 const stub = new FetchStub();
 stub.install();
-function anthropicEcho() {
+
+const AUTH = { authorization: "Bearer good" };
+
+// Default stub: a valid authenticated user + an echoing Anthropic endpoint.
+function ready() {
   stub.reset();
+  stub.on("/auth/v1/user", () => ({ json: { id: "member-1" } }));
   stub.on("api.anthropic.com", (c) => {
     const sent = JSON.parse(c.body || "{}");
-    // Echo the last message content so the test can inspect what reached the LLM.
     const last = sent.messages[sent.messages.length - 1]?.content ?? "";
     return { json: { content: [{ text: `ECHO:${last}` }] } };
   });
 }
 
+function shieldReq(bodyObj: unknown, headers: Record<string, string> = AUTH) {
+  return makeReq("https://care/api/shield", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(bodyObj),
+  });
+}
+
+test("SECURITY (F2 fixed): anonymous request is rejected 401, never reaches the LLM", async () => {
+  ready();
+  const res = await POST(shieldReq({ messages: [{ role: "user", content: "hello" }] }, {}));
+  const { status } = await readJson(res);
+  assert.equal(status, 401);
+  assert.equal(stub.calls.some((c) => c.url.includes("api.anthropic.com")), false);
+});
+
+test("SECURITY (F2 fixed): an invalid token is rejected 401", async () => {
+  stub.reset();
+  stub.on("/auth/v1/user", () => ({ status: 401, text: "bad token" }));
+  const res = await POST(shieldReq({ messages: [{ role: "user", content: "hi" }] }));
+  const { status } = await readJson(res);
+  assert.equal(status, 401);
+});
+
 test("SSN is redacted before reaching the model", async () => {
-  anthropicEcho();
-  const res = await POST(
-    makeReq("https://care/api/shield", {
-      method: "POST",
-      body: JSON.stringify({ messages: [{ role: "user", content: "My SSN is 123-45-6789" }], patientId: "p1" }),
-    }),
-  );
+  ready();
+  const res = await POST(shieldReq({ messages: [{ role: "user", content: "My SSN is 123-45-6789" }], patientId: "p1" }));
   const { body } = await readJson(res);
   assert.match(body.content, /\[SSN_PROTECTED\]/);
   assert.doesNotMatch(body.content, /123-45-6789/);
@@ -34,73 +59,53 @@ test("SSN is redacted before reaching the model", async () => {
 });
 
 test("clean text passes through and is marked CLEAN_PASS", async () => {
-  anthropicEcho();
-  const res = await POST(
-    makeReq("https://care/api/shield", {
-      method: "POST",
-      body: JSON.stringify({ messages: [{ role: "user", content: "How do I refill a prescription?" }] }),
-    }),
-  );
+  ready();
+  const res = await POST(shieldReq({ messages: [{ role: "user", content: "How do I refill a prescription?" }] }));
   const { body } = await readJson(res);
   assert.equal(body.shield.action, "CLEAN_PASS");
   assert.equal(body.shield.flags.length, 0);
 });
 
-test("SECURITY: endpoint requires no authentication (free LLM proxy / cost abuse)", async () => {
-  anthropicEcho();
-  // No Authorization header at all.
+test("F6 fixed: PII in earlier (non-last) messages IS sanitized", async () => {
+  ready();
   const res = await POST(
-    makeReq("https://care/api/shield", {
-      method: "POST",
-      body: JSON.stringify({ messages: [{ role: "user", content: "hello" }] }),
+    shieldReq({
+      messages: [
+        { role: "user", content: "Her SSN is 987-65-4321" }, // earlier turn
+        { role: "assistant", content: "Noted." },
+        { role: "user", content: "Thanks" },
+      ],
     }),
   );
-  const { status } = await readJson(res);
-  assert.equal(status, 200);
-  const calledLLM = stub.calls.some((c) => c.url.includes("api.anthropic.com"));
-  assert.equal(calledLLM, true, "anonymous request reached the paid Anthropic API");
-});
-
-test("BUG: PII in earlier (non-last) messages is NOT sanitized", async () => {
-  anthropicEcho();
-  const res = await POST(
-    makeReq("https://care/api/shield", {
-      method: "POST",
-      body: JSON.stringify({
-        messages: [
-          { role: "user", content: "Her SSN is 987-65-4321" }, // earlier turn — leaks
-          { role: "assistant", content: "Noted." },
-          { role: "user", content: "Thanks" }, // only this last one is scanned
-        ],
-      }),
-    }),
-  );
-  // Inspect what actually got POSTed to Anthropic.
+  await readJson(res);
   const llmCall = stub.calls.find((c) => c.url.includes("api.anthropic.com"))!;
   const sentMessages = JSON.parse(llmCall.body || "{}").messages;
   const firstContent = sentMessages[0].content;
-  assert.match(firstContent, /987-65-4321/, "SSN in a prior turn leaked to the model unredacted");
+  assert.doesNotMatch(firstContent, /987-65-4321/, "SSN in a prior turn must be redacted");
+  assert.match(firstContent, /\[SSN_PROTECTED\]/);
 });
 
-test("missing messages array is handled without a crash (500 error json)", async () => {
-  anthropicEcho();
-  const res = await POST(
-    makeReq("https://care/api/shield", { method: "POST", body: JSON.stringify({ patientId: "p1" }) }),
-  );
+test("empty/missing messages array returns 400 (not a crash)", async () => {
+  ready();
+  const res = await POST(shieldReq({ patientId: "p1" }));
   const { status, body } = await readJson(res);
-  assert.equal(status, 500);
+  assert.equal(status, 400);
   assert.ok(body.error);
 });
 
 test("risk score is capped at 100", async () => {
-  anthropicEcho();
+  ready();
   const flood = Array.from({ length: 20 }, (_, i) => `1${String(i).padStart(2, "0")}-45-6789`).join(" ");
-  const res = await POST(
-    makeReq("https://care/api/shield", {
-      method: "POST",
-      body: JSON.stringify({ messages: [{ role: "user", content: flood }] }),
-    }),
-  );
+  const res = await POST(shieldReq({ messages: [{ role: "user", content: flood }] }));
   const { body } = await readJson(res);
   assert.ok(body.shield.riskScore <= 100);
+});
+
+test("message content is truncated to the 8000-char cap before the LLM call", async () => {
+  ready();
+  const res = await POST(shieldReq({ messages: [{ role: "user", content: "a".repeat(50_000) }] }));
+  await readJson(res);
+  const llmCall = stub.calls.find((c) => c.url.includes("api.anthropic.com"))!;
+  const sent = JSON.parse(llmCall.body || "{}").messages;
+  assert.ok(sent[sent.length - 1].content.length <= 8000);
 });
