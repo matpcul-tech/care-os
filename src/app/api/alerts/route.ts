@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { logPhiAccess, requestContext } from '@/lib/audit';
 
 export const runtime = 'edge';
 
@@ -507,6 +508,26 @@ export async function POST(req: NextRequest) {
       delivery,
       smsDelivery,
       firedAt: sentAt,
+    });
+
+    // Audit the outbound dispatch (system-originated; no end-user actor).
+    const emailsSent = delivery.filter((d) => d.sent).length;
+    const smsSent = smsDelivery.filter((s) => s.sent).length;
+    const ctx = requestContext(req.headers);
+    await logPhiAccess({
+      patientId,
+      actorUserId: null,
+      actorRole: 'system',
+      action: 'alert_sent',
+      resourceType: 'alert',
+      detail: {
+        metrics: flags.map((f) => f.metric),
+        severities: flags.map((f) => f.severity),
+        emails_sent: emailsSent,
+        sms_sent: smsSent,
+      },
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
     });
 
     return NextResponse.json({

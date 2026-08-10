@@ -5,6 +5,7 @@ import { FetchStub, makeReq, readJson } from "./harness.mts";
 process.env.ANTHROPIC_API_KEY = "sk-test";
 process.env.NEXT_PUBLIC_SUPABASE_URL = "https://sb.test";
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
+process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
 
 const { POST } = await import("../src/app/api/shield/route.ts");
 
@@ -99,6 +100,31 @@ test("risk score is capped at 100", async () => {
   const res = await POST(shieldReq({ messages: [{ role: "user", content: flood }] }));
   const { body } = await readJson(res);
   assert.ok(body.shield.riskScore <= 100);
+});
+
+function auditRows() {
+  return stub.calls
+    .filter((c) => c.url.includes("/rest/v1/phi_access_log") && c.method === "POST")
+    .flatMap((c) => JSON.parse(c.body || "[]"));
+}
+
+test("AI query is written to the audit trail with patient + actor", async () => {
+  ready();
+  const res = await POST(shieldReq({ messages: [{ role: "user", content: "refill?" }], patientId: "patient-1" }));
+  await readJson(res);
+  const rows = auditRows();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].action, "ai_query");
+  assert.equal(rows[0].resource_type, "ai_chat");
+  assert.equal(rows[0].patient_id, "patient-1");
+  assert.equal(rows[0].actor_user_id, "member-1");
+});
+
+test("AI query with no patientId is not patient-scoped-audited (table requires patient_id)", async () => {
+  ready();
+  const res = await POST(shieldReq({ messages: [{ role: "user", content: "hi" }] }));
+  await readJson(res);
+  assert.equal(auditRows().length, 0);
 });
 
 test("message content is truncated to the 8000-char cap before the LLM call", async () => {

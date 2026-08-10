@@ -127,6 +127,24 @@ test("signed vitals request is accepted and fans out", async () => {
   assert.equal(stub.calls.some((c) => c.url.includes("api.resend.com")), true);
 });
 
+test("alert dispatch is written to the audit trail (system actor)", async () => {
+  stub.reset();
+  circleMembers([
+    { id: "m1", member_email: "a@x.com", member_name: "A", member_phone: null, alert_level: "informational" },
+  ]);
+  const res = await POST(signedReq({ patient_id: "p1", vitals: { bp_systolic: 200 } }));
+  await readJson(res);
+  const rows = stub.calls
+    .filter((c) => c.url.includes("/rest/v1/phi_access_log") && c.method === "POST")
+    .flatMap((c) => JSON.parse(c.body || "[]"));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].action, "alert_sent");
+  assert.equal(rows[0].resource_type, "alert");
+  assert.equal(rows[0].actor_role, "system");
+  assert.equal(rows[0].patient_id, "p1");
+  assert.ok(rows[0].detail.metrics.includes("Blood Pressure"));
+});
+
 test("grade-change WITHOUT signature is rejected 401", async () => {
   stub.reset();
   circleMembers([]);

@@ -147,3 +147,42 @@ test("GET without patient_id returns 400", async () => {
   const { status } = await readJson(res);
   assert.equal(status, 400);
 });
+
+test("POST rejects an invalid care_role", async () => {
+  stub.reset();
+  auth("patient-1", true);
+  const res = await POST(
+    makeReq("https://care/api/circle", {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({ patient_id: "p", member_email: "a@x.com", member_name: "X", relationship: "Son", alert_level: "critical", care_role: "root" }),
+    }),
+  );
+  const { status, body } = await readJson(res);
+  assert.equal(status, 400);
+  assert.match(body.error, /care_role/);
+});
+
+test("authorized POST persists the chosen care_role", async () => {
+  stub.reset();
+  stub.on("/auth/v1/user", () => ({ json: { id: "patient-1" } }));
+  let insertedRole: string | undefined;
+  stub.on("/rest/v1/care_circle", (c) => {
+    if (c.method === "POST") {
+      insertedRole = JSON.parse(c.body || "[]")[0]?.care_role;
+      return { json: [{ id: "new", ...JSON.parse(c.body || "[]")[0] }] };
+    }
+    return undefined;
+  });
+  stub.on("api.resend.com", () => ({ json: { id: "e" } }));
+  const res = await POST(
+    makeReq("https://care/api/circle", {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({ patient_id: "patient-1", member_email: "v@x.com", member_name: "V", relationship: "Friend", alert_level: "informational", care_role: "viewer" }),
+    }),
+  );
+  const { status } = await readJson(res);
+  assert.equal(status, 200);
+  assert.equal(insertedRole, "viewer");
+});

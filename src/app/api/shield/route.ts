@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { bearerToken, getUserId } from '@/lib/api-auth';
+import { logPhiAccess, requestContext } from '@/lib/audit';
 
 export const runtime = 'edge';
 
@@ -85,6 +86,21 @@ export async function POST(req: NextRequest) {
       action: flags.size > 0 ? 'PII_BLOCKED' : 'CLEAN_PASS',
       shieldVersion: '2.0.0-ZK',
     };
+
+    // Audit the AI query: an authenticated user sent (shield-sanitized) PHI
+    // context to the model. Only records patient-scoped queries.
+    if (typeof patientId === 'string' && patientId) {
+      const ctx = requestContext(req.headers);
+      await logPhiAccess({
+        patientId,
+        actorUserId: userId,
+        action: 'ai_query',
+        resourceType: 'ai_chat',
+        detail: { flags: auditEntry.flags, riskScore, riskLevel: auditEntry.riskLevel, action: auditEntry.action },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+    }
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'API key not configured' }, { status: 500 });

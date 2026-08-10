@@ -88,6 +88,58 @@ Shared auth helpers live in `src/lib/api-auth.ts`.
   (`F5 fixed (TOCTOU): … exactly one wins`) plus claim/release assertions in
   `redeem.test.mts`.
 
+## HIPAA hardening: role-scoped access + audit logging
+
+Added after the F1–F6 fixes to address two HIPAA Security Rule gaps:
+minimum-necessary access (§164.502(b)) and audit controls (§164.312(b)).
+Suite is now **94/94 passing**, `tsc` clean, `next build` clean.
+
+### Role-scoped access (minimum-necessary)
+
+Migration `20260508000001_care_role_scoped_access.sql` adds a `care_role`
+(`admin` | `caregiver` | `viewer`) to `care_circle` and splits the single
+`is_patient_or_member()` gate into per-verb capability functions
+(`cc_can_read` / `cc_can_write` / `cc_can_delete` / `cc_can_read_vault` /
+`cc_can_delete_vault`). RLS on medications, medication_logs, appointments,
+care_tasks, and vault_files now enforces:
+
+| Capability | admin | caregiver | viewer |
+|---|:--:|:--:|:--:|
+| Read clinical records | ✅ | ✅ | ✅ |
+| Create / update records | ✅ | ✅ | — |
+| Delete records | ✅ | — | — |
+| Read / upload vault docs | ✅ | ✅ | — |
+| Delete vault docs | ✅ | — | — |
+
+The patient is implicitly `admin`. Existing members are grandfathered to
+`admin` (non-breaking); new members default to `caregiver`. The role is
+threaded through `generate-invite` (`suggested_role`), `redeem`, and the
+add-member route. **Redeem cannot escalate:** a client-supplied role may
+only *narrow* the invite's `suggested_role`, never raise it. The
+service-role vault API routes enforce the same tiers in code (viewers get
+403 on download/upload; only admins can delete). Tests: `vault-roles.test.mts`,
+role cases in `redeem.test.mts` and `circle.test.mts`.
+
+### Audit logging (§164.312(b))
+
+Migration `20260508000002_phi_access_log.sql` adds an append-only
+`phi_access_log` table (patient/admin-readable, no client writes). Two feeds:
+
+- **DB triggers** capture every INSERT/UPDATE/DELETE on the client-writable
+  clinical tables (medications, medication_logs, appointments, care_tasks),
+  stamping actor + role from `auth.uid()` / `cc_role()`.
+- **Service-role API routes** log the flows that bypass those tables: vault
+  upload/download/delete, AI chat queries (PHI egress to the model), and
+  outbound alert dispatch — via `src/lib/audit.ts`.
+
+**Known limitation (documented in the migration):** PostgreSQL has no SELECT
+trigger, so plain reads of the clinical tables are not captured. The
+highest-sensitivity reads — vault document downloads and AI queries — *are*
+logged. Full read-auditing of the clinical tables would need a read-through
+API endpoint or a DB audit extension / log drain (pgAudit); tracked as
+follow-up. Tests: `audit.test.mts` plus emission assertions in
+`vault-roles.test.mts`, `shield.test.mts`, `alerts.test.mts`.
+
 ## Findings (as originally verified by test)
 
 ### F1 — CRITICAL: `/api/shield` quadratic-complexity DoS, unauthenticated

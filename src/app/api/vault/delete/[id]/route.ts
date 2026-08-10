@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { authVaultForFile } from "@/lib/vault-auth";
+import { authVaultForFile, canDeleteVault } from "@/lib/vault-auth";
+import { logPhiAccess, requestContext } from "@/lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,12 @@ export async function DELETE(
   const auth = await authVaultForFile(req, params.id);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.message }, { status: auth.status });
+  }
+  if (!canDeleteVault(auth.role)) {
+    return NextResponse.json(
+      { error: "only a Care Circle admin can delete documents" },
+      { status: 403 },
+    );
   }
 
   const r = await fetch(
@@ -48,6 +55,18 @@ export async function DELETE(
     method: "DELETE",
     headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
   }).catch(() => {});
+
+  const ctx = requestContext(req.headers);
+  await logPhiAccess({
+    patientId: auth.patientId,
+    actorUserId: auth.userId,
+    actorRole: auth.role,
+    action: "delete",
+    resourceType: "vault_file",
+    resourceId: params.id,
+    ip: ctx.ip,
+    userAgent: ctx.userAgent,
+  });
 
   return NextResponse.json({ ok: true });
 }

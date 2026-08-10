@@ -28,6 +28,9 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://care-os.vercel.app';
 const ALERT_LEVELS = ['critical', 'informational'] as const;
 type AlertLevel = (typeof ALERT_LEVELS)[number];
 
+const CARE_ROLES = ['admin', 'caregiver', 'viewer'] as const;
+type CareRole = (typeof CARE_ROLES)[number];
+
 interface AddMemberBody {
   patient_id?: string;
   patientId?: string;
@@ -35,6 +38,8 @@ interface AddMemberBody {
   member_name?: string;
   relationship?: string;
   alert_level?: string;
+  care_role?: string;
+  role?: string;
   patient_name?: string;
 }
 
@@ -144,6 +149,7 @@ export async function POST(req: NextRequest) {
     const member_name = (body.member_name || '').trim();
     const relationship = (body.relationship || '').trim();
     const alert_level = ((body.alert_level || 'informational').trim() as AlertLevel);
+    const care_role = ((body.care_role || body.role || 'caregiver').trim() as CareRole);
 
     if (!patientId) return bad('patient_id required');
     if (!isEmail(member_email)) return bad('valid member_email required');
@@ -152,6 +158,9 @@ export async function POST(req: NextRequest) {
     if (!ALERT_LEVELS.includes(alert_level)) {
       return bad('alert_level must be "critical" or "informational"');
     }
+    if (!CARE_ROLES.includes(care_role)) {
+      return bad('care_role must be "admin", "caregiver", or "viewer"');
+    }
 
     const denied = await authorizeForPatient(req, patientId);
     if (denied) return denied;
@@ -159,7 +168,7 @@ export async function POST(req: NextRequest) {
     const insertRes = await sb(
       'POST',
       'care_circle',
-      [{ patient_id: patientId, member_email, member_name, relationship, alert_level }],
+      [{ patient_id: patientId, member_email, member_name, relationship, alert_level, care_role }],
       'return=representation',
     );
 

@@ -9,6 +9,9 @@ const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const ALERT_LEVELS = ['critical', 'informational'] as const;
 type AlertLevel = (typeof ALERT_LEVELS)[number];
 
+const CARE_ROLES = ['admin', 'caregiver', 'viewer'] as const;
+type CareRole = (typeof CARE_ROLES)[number];
+
 interface RedeemBody {
   code?: string;
   email?: string;
@@ -17,6 +20,8 @@ interface RedeemBody {
   member_phone?: string;
   relationship?: string;
   alert_level?: string;
+  care_role?: string;
+  role?: string;
 }
 
 interface InviteRow {
@@ -26,6 +31,7 @@ interface InviteRow {
   patient_name: string | null;
   suggested_relationship: string | null;
   suggested_alert_level: AlertLevel | null;
+  suggested_role: CareRole | null;
   expires_at: string;
   used_at: string | null;
   revoked_at: string | null;
@@ -283,6 +289,17 @@ export async function POST(req: NextRequest) {
       return bad('alert_level must be "critical" or "informational"');
     }
 
+    // Resolve the member's access role. The invite's suggested_role (set by
+    // the patient) is authoritative; a client-supplied role may only NARROW
+    // it, never escalate — so a viewer invite can't be redeemed as an admin.
+    const suggestedRole: CareRole = invite.suggested_role || 'caregiver';
+    const requestedRole = (body.care_role || body.role || '').trim() as CareRole;
+    const RANK: Record<CareRole, number> = { viewer: 0, caregiver: 1, admin: 2 };
+    let finalRole: CareRole = suggestedRole;
+    if (CARE_ROLES.includes(requestedRole) && RANK[requestedRole] < RANK[suggestedRole]) {
+      finalRole = requestedRole;
+    }
+
     // Atomically claim the invite BEFORE creating any account. inviteUsable()
     // above is only an early, friendly-error check; this conditional UPDATE
     // is the authority on single-use. If we lose the race (or the code was
@@ -352,6 +369,7 @@ export async function POST(req: NextRequest) {
           member_phone,
           relationship: finalRelationship,
           alert_level: finalAlertLevel,
+          care_role: finalRole,
           invite_id: invite.id,
         },
       ]),

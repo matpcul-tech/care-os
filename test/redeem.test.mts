@@ -188,6 +188,57 @@ test("POST rolls back the auth user if the circle insert fails", async () => {
   assert.ok(released, "a failed redemption must release its invite claim");
 });
 
+// Helper: run a full happy-path redeem and return the care_role written to
+// the care_circle insert. `inviteOverrides` and `body` tune the invite's
+// suggested_role and the client-requested role.
+async function redeemAndCaptureRole(
+  inviteOverrides: Record<string, unknown>,
+  bodyExtra: Record<string, unknown>,
+): Promise<string | undefined> {
+  stub.reset();
+  let insertedRole: string | undefined;
+  stub
+    .on("care_circle_invites?code", () => ({ json: [inviteRow(inviteOverrides)] }))
+    .on("care_circle_invites?id", () => ({ json: [{ id: "inv1" }] }))
+    .on("/auth/v1/admin/users", (c) => (c.method === "POST" ? { json: { id: "new-user", email: "f@x.com" } } : undefined))
+    .on("/rest/v1/care_circle", (c) => {
+      if (c.method === "POST") {
+        insertedRole = JSON.parse(c.body || "[]")[0]?.care_role;
+        return { json: [{ id: "cc1", patient_id: "patient-1" }] };
+      }
+      return undefined;
+    })
+    .on("/auth/v1/token", () => ({ json: { access_token: "at", refresh_token: "rt", expires_at: 999 } }));
+  const res = await POST(
+    makeReq("https://care/api/circle/redeem", {
+      method: "POST",
+      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "longenough", member_name: "Fam", ...bodyExtra }),
+    }),
+  );
+  await readJson(res);
+  return insertedRole;
+}
+
+test("redeem assigns the invite's suggested_role", async () => {
+  const role = await redeemAndCaptureRole({ suggested_role: "viewer" }, {});
+  assert.equal(role, "viewer");
+});
+
+test("redeem defaults to caregiver when the invite suggests no role", async () => {
+  const role = await redeemAndCaptureRole({}, {});
+  assert.equal(role, "caregiver");
+});
+
+test("SECURITY: client CANNOT escalate above the invite's suggested_role", async () => {
+  const role = await redeemAndCaptureRole({ suggested_role: "viewer" }, { role: "admin" });
+  assert.equal(role, "viewer", "a viewer invite must not be redeemable as admin");
+});
+
+test("client MAY narrow below the suggested role", async () => {
+  const role = await redeemAndCaptureRole({ suggested_role: "admin" }, { role: "viewer" });
+  assert.equal(role, "viewer");
+});
+
 test("POST maps duplicate-email auth error to 409", async () => {
   stub.reset();
   stub

@@ -16,6 +16,7 @@ type Responder = (call: RecordedCall) => {
   status?: number;
   json?: unknown;
   text?: string;
+  bytes?: Uint8Array;
 } | undefined;
 
 export class FetchStub {
@@ -61,6 +62,12 @@ export class FetchStub {
           const out = r.responder(call);
           if (out) {
             const status = out.status ?? 200;
+            if (out.bytes !== undefined) {
+              return new Response(out.bytes, {
+                status,
+                headers: { "Content-Type": "application/octet-stream" },
+              });
+            }
             const payload =
               out.text !== undefined ? out.text : JSON.stringify(out.json ?? {});
             return new Response(payload, {
