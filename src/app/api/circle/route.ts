@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { bearerToken, getUserId, isPatientOrMember } from '@/lib/api-auth';
 import { checkRateLimit, clientIp } from '@/lib/rate-limit';
+import { sendEmail } from '@/lib/providers/email';
 
 export const runtime = 'edge';
 
@@ -24,8 +25,6 @@ async function authorizeForPatient(
   }
   return null;
 }
-const RESEND_API_KEY = process.env.RESEND_API_KEY!;
-const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'CareCircle <care@carecircle.health>';
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://care-os.vercel.app';
 
 const ALERT_LEVELS = ['critical', 'informational'] as const;
@@ -80,10 +79,6 @@ async function sendInviteEmail(args: {
   relationship: string;
   alertLevel: AlertLevel;
 }) {
-  if (!RESEND_API_KEY) {
-    return { sent: false, reason: 'RESEND_API_KEY not configured' };
-  }
-
   const subject = `You've been invited to ${args.patientName}'s Care Circle`;
   const cadence =
     args.alertLevel === 'critical'
@@ -106,20 +101,7 @@ async function sendInviteEmail(args: {
   </p>
 </div>`.trim();
 
-  const r = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ from: FROM_EMAIL, to: args.to, subject, html }),
-  });
-
-  if (!r.ok) {
-    return { sent: false, reason: `Resend ${r.status}: ${await r.text()}` };
-  }
-  const data = (await r.json()) as { id?: string };
-  return { sent: true, id: data.id ?? null };
+  return sendEmail({ to: args.to, subject, html });
 }
 
 export async function GET(req: NextRequest) {

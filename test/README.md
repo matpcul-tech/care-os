@@ -225,6 +225,30 @@ enrollment card in FamilyPage). Tests: `login.test.mts` — success, generic
 > Supabase's own MFA feature. Tokens still live in `localStorage` (unchanged);
 > moving them to httpOnly cookies remains a recommended follow-up.
 
+## Provider abstraction (vendor-swappable AI / email / SMS)
+
+Decouples the app from single vendors so you can move off (or self-host) any
+of them by env alone. Suite is now **142/142 passing**, `tsc` clean,
+`next build` clean. See `.env.example` for the full matrix.
+
+- **`src/lib/providers/llm.ts`** — one `chatComplete()` seam.
+  `LLM_PROVIDER=anthropic` (default) or `openai` (any OpenAI-compatible
+  `/chat/completions` endpoint: **a self-hosted local model via Ollama / vLLM
+  / LM Studio**, OpenAI, etc.). Selected at call time; normalizes the system
+  prompt + message shapes per provider. `/api/shield` now calls this — the
+  AI vendor is a config switch, and can be dropped entirely for a local model.
+- **`src/lib/providers/email.ts`** — `EMAIL_PROVIDER=resend` (default) or
+  `http` (POST to your own mailer webhook — self-hosted relay / SES shim).
+  `/api/circle` and `/api/alerts` use it.
+- **`src/lib/providers/sms.ts`** — `SMS_PROVIDER=twilio` (default) or `http`
+  (your own gateway). `/api/alerts` uses it.
+
+Defaults keep the exact previous endpoints/behavior (all prior tests pass
+unchanged). Tests: `providers.test.mts` — Anthropic vs OpenAI-compatible body
+formatting + parsing, bearer-token handling, config-error detection, email +
+SMS provider dispatch, and an **end-to-end shield request served by a local
+OpenAI-compatible model with no Anthropic call**.
+
 ## Findings (as originally verified by test)
 
 ### F1 — CRITICAL: `/api/shield` quadratic-complexity DoS, unauthenticated

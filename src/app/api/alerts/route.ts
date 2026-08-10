@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { logPhiAccess, requestContext } from '@/lib/audit';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { sendEmail } from '@/lib/providers/email';
+import { sendSms } from '@/lib/providers/sms';
 
 export const runtime = 'edge';
 
@@ -8,13 +10,6 @@ const RATE_LIMIT = { name: 'alerts', max: 120, windowSeconds: 60 };
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const RESEND_API_KEY = process.env.RESEND_API_KEY!;
-const FROM_EMAIL =
-  process.env.RESEND_FROM_EMAIL || 'CareCircle <care@carecircle.health>';
-
-const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_FROM = process.env.TWILIO_FROM_NUMBER;
 
 const CAREIQ_ALERT_SIGNING_KEY = process.env.CAREIQ_ALERT_SIGNING_KEY;
 const SIGNATURE_MAX_AGE_SEC = 300;
@@ -212,10 +207,6 @@ async function sendAlertEmail(args: {
   patientId: string;
   flags: Flag[];
 }) {
-  if (!RESEND_API_KEY) {
-    return { sent: false as const, reason: 'RESEND_API_KEY not configured' };
-  }
-
   const hasCritical = args.flags.some((f) => f.severity === 'critical');
   const patientRef = args.patientId.slice(0, 8);
   const subject = hasCritical
@@ -247,51 +238,7 @@ async function sendAlertEmail(args: {
   </p>
 </div>`.trim();
 
-  const r = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ from: FROM_EMAIL, to: args.to, subject, html }),
-  });
-
-  if (!r.ok) {
-    return { sent: false as const, reason: `Resend ${r.status}: ${await r.text()}` };
-  }
-  const data = (await r.json()) as { id?: string };
-  return { sent: true as const, id: data.id ?? null };
-}
-
-async function sendSms(args: {
-  to: string;
-  body: string;
-}): Promise<{ sent: boolean; sid?: string | null; reason?: string }> {
-  if (!TWILIO_SID || !TWILIO_TOKEN || !TWILIO_FROM) {
-    return { sent: false, reason: 'TWILIO_* env not configured' };
-  }
-  const auth = btoa(`${TWILIO_SID}:${TWILIO_TOKEN}`);
-  const params = new URLSearchParams({
-    From: TWILIO_FROM,
-    To: args.to,
-    Body: args.body,
-  });
-  const r = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${auth}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params.toString(),
-    },
-  );
-  if (!r.ok) {
-    return { sent: false, reason: `Twilio ${r.status}: ${await r.text()}` };
-  }
-  const data = (await r.json()) as { sid?: string };
-  return { sent: true, sid: data.sid ?? null };
+  return sendEmail({ to: args.to, subject, html });
 }
 
 function buildSmsBody(patientRef: string, criticalFlags: Flag[]): string {

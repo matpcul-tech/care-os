@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { bearerToken, getUserId } from '@/lib/api-auth';
 import { logPhiAccess, requestContext } from '@/lib/audit';
 import { checkRateLimit, tooManyRequests } from '@/lib/rate-limit';
+import { chatComplete, llmConfigError, type LlmMessage } from '@/lib/providers/llm';
 
 export const runtime = 'edge';
 
@@ -110,18 +111,26 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
+    // Provider-agnostic completion (Anthropic by default; any OpenAI-compatible
+    // endpoint — including a self-hosted local model — via LLM_PROVIDER=openai).
+    const cfgErr = llmConfigError();
+    if (cfgErr) return NextResponse.json({ error: cfgErr }, { status: 500 });
 
-    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 600, system: SYSTEM, messages: finalMessages }),
-    });
-
-    const aiData = await aiRes.json();
+    let content = '';
+    try {
+      const out = await chatComplete({
+        system: SYSTEM,
+        messages: finalMessages as LlmMessage[],
+        maxTokens: 600,
+      });
+      content = out.text;
+    } catch {
+      // Provider/network failure — degrade gracefully; the audit row is
+      // already written above.
+      content = '';
+    }
     return NextResponse.json({
-      content: aiData.content?.[0]?.text || 'Unable to connect.',
+      content: content || 'Unable to connect.',
       shield: auditEntry,
     });
   } catch {
