@@ -13,6 +13,11 @@ only needs `NEXT_PUBLIC_SUPABASE_URL` pointed here.
 > Work through the **Hardening** checklist below before any real PHI, and get
 > a BAA with whoever hosts the servers (AWS/GCP/colo).
 
+> **Already live on managed Supabase and want to cut over?** After this stack
+> is up and migrated, follow **[MIGRATION.md](./MIGRATION.md)** to move your
+> existing accounts, data, and encrypted vault files off the managed project
+> and onto your own — then decommission the managed project.
+
 ## Architecture
 
 ```
