@@ -46,10 +46,10 @@ import `next/server` and the `@/` alias — load unmodified.
 - **update-nickname** (`update-nickname.test.mts`): requires a valid JWT,
   scopes the PATCH to the caller's own `member_user_id`, clamps to 60 chars.
 
-## Fixes applied (F1–F4, plus F6)
+## Fixes applied (F1–F6)
 
-All four requested items are fixed and the tests now assert the *fixed*
-behavior (73/73 passing, `tsc` clean, `next build` clean).
+All findings are fixed and the tests now assert the *fixed* behavior
+(73/73 passing, `tsc` clean, `next build` clean).
 
 - **F1 — CRITICAL DoS: fixed.** `serverScan()` now does one linear
   `regex.replace(pattern, token)` pass per pattern instead of a per-match
@@ -78,8 +78,15 @@ Shared auth helpers live in `src/lib/api-auth.ts`.
 > sign vitals requests too (same `ts + ":" + rawBody` HMAC-SHA256 with
 > `CAREIQ_ALERT_SIGNING_KEY`). This is the intended security posture.
 
-**F5 (invite-redemption TOCTOU) was NOT in scope for this fix** and remains
-open; its documenting test still passes.
+- **F5 — invite-redemption TOCTOU: fixed.** `redeem` now claims the invite
+  with a single conditional PATCH (`?id=eq.X&used_at=is.null&revoked_at=is.null`
+  setting `used_at`) *before* creating any account. PostgREST applies the
+  WHERE-clause server-side, so of N concurrent redemptions exactly one gets a
+  non-empty representation; losers are rejected 410 before an account exists.
+  Failed redemptions (auth-create or circle-insert errors) release the claim
+  so the code stays reusable. Test: `stress.test.mts`
+  (`F5 fixed (TOCTOU): … exactly one wins`) plus claim/release assertions in
+  `redeem.test.mts`.
 
 ## Findings (as originally verified by test)
 

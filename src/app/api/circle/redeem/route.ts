@@ -91,6 +91,55 @@ function inviteUsable(invite: InviteRow): { ok: true } | { ok: false; reason: st
   return { ok: true };
 }
 
+// Atomically claim an invite: a single conditional UPDATE that flips
+// used_at from null -> now(), matching only rows that are still unused and
+// unrevoked. PostgREST applies the WHERE-clause server-side, so of N
+// concurrent redemptions exactly one gets a non-empty representation back
+// and the rest see zero rows. This is the compare-and-set that closes the
+// check-then-act race where two requests both pass inviteUsable() before
+// either marks the code used. Returns 'claimed' for the winner, 'already'
+// for losers/duplicates, and 'error' on any transport/DB failure.
+async function claimInvite(
+  inviteId: string,
+  usedAt: string,
+): Promise<'claimed' | 'already' | 'error'> {
+  const r = await fetch(
+    `${SUPABASE_URL}/rest/v1/care_circle_invites` +
+      `?id=eq.${encodeURIComponent(inviteId)}&used_at=is.null&revoked_at=is.null`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: SERVICE_ROLE,
+        Authorization: `Bearer ${SERVICE_ROLE}`,
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify({ used_at: usedAt }),
+    },
+  );
+  if (!r.ok) return 'error';
+  const rows = (await r.json().catch(() => [])) as unknown[];
+  return Array.isArray(rows) && rows.length > 0 ? 'claimed' : 'already';
+}
+
+// Release a claim we took but could not complete (e.g. the auth-user
+// creation or circle insert failed), so the code stays usable for a retry.
+// Best-effort: a failure here only means the code remains consumed.
+async function releaseInvite(inviteId: string): Promise<void> {
+  await fetch(
+    `${SUPABASE_URL}/rest/v1/care_circle_invites?id=eq.${encodeURIComponent(inviteId)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: SERVICE_ROLE,
+        Authorization: `Bearer ${SERVICE_ROLE}`,
+      },
+      body: JSON.stringify({ used_at: null, used_by: null }),
+    },
+  ).catch(() => {});
+}
+
 // Backfill patient_name when the invite row was written with null. The
 // patient is a Supabase auth user (CareIQ schema: patients.id = auth.uid()),
 // and the patients table itself stores only an AES-256-GCM-encrypted
@@ -234,6 +283,19 @@ export async function POST(req: NextRequest) {
       return bad('alert_level must be "critical" or "informational"');
     }
 
+    // Atomically claim the invite BEFORE creating any account. inviteUsable()
+    // above is only an early, friendly-error check; this conditional UPDATE
+    // is the authority on single-use. If we lose the race (or the code was
+    // already redeemed), stop here — no user is created.
+    const claimedAt = new Date().toISOString();
+    const claim = await claimInvite(invite.id, claimedAt);
+    if (claim === 'error') {
+      return bad('lookup failed', 502);
+    }
+    if (claim === 'already') {
+      return bad('invite has already been redeemed', 410);
+    }
+
     const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
       method: 'POST',
       headers: {
@@ -251,6 +313,9 @@ export async function POST(req: NextRequest) {
 
     if (!createRes.ok) {
       const txt = await createRes.text();
+      // The redemption did not consume the invite — release our claim so the
+      // code can be retried (e.g. with a different email).
+      await releaseInvite(invite.id);
       if (
         createRes.status === 422 ||
         txt.includes('already been registered') ||
@@ -298,6 +363,8 @@ export async function POST(req: NextRequest) {
         method: 'DELETE',
         headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
       });
+      // Roll back the claim too so the invite is reusable after this failure.
+      await releaseInvite(invite.id);
       console.error('[redeem POST] circle insert', insertRes.status, txt.slice(0, 240));
       return bad('circle insert failed', 500, {
         supabase_status: insertRes.status,
@@ -324,6 +391,8 @@ export async function POST(req: NextRequest) {
       ).catch(() => {});
     }
 
+    // used_at was already set atomically at claim time; just record who
+    // redeemed it. Best-effort — the invite is already consumed either way.
     await fetch(
       `${SUPABASE_URL}/rest/v1/care_circle_invites?id=eq.${invite.id}`,
       {
@@ -333,12 +402,9 @@ export async function POST(req: NextRequest) {
           apikey: SERVICE_ROLE,
           Authorization: `Bearer ${SERVICE_ROLE}`,
         },
-        body: JSON.stringify({
-          used_at: new Date().toISOString(),
-          used_by: newUser.id,
-        }),
+        body: JSON.stringify({ used_by: newUser.id }),
       },
-    );
+    ).catch(() => {});
 
     const tokenRes = await fetch(
       `${SUPABASE_URL}/auth/v1/token?grant_type=password`,

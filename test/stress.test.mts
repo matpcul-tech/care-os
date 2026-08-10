@@ -65,14 +65,16 @@ test("STRESS: shield stays correct across 500 mixed-PII messages", async () => {
   }
 });
 
-test("SECURITY (TOCTOU): the same invite code can be redeemed twice under concurrency", async () => {
+test("F5 fixed (TOCTOU): concurrent redemptions of one code — exactly one wins", async () => {
   stub.reset();
   const future = new Date(Date.now() + 86_400_000).toISOString();
   let usersCreated = 0;
   let circleRows = 0;
-  // The invite lookup ALWAYS returns an unused invite — modeling two
-  // requests that both read the row before either marks it used. There is
-  // no atomic compare-and-set in the redeem route, so both proceed.
+  // Model the DB-enforced atomic claim: the invite lookup always shows the
+  // row as unused (both requests pass the friendly inviteUsable() check), but
+  // the conditional "used_at IS NULL" claim PATCH succeeds only ONCE. The
+  // first claim returns a row (winner); every later claim returns [] (loser).
+  let claimed = false;
   stub
     .on("care_circle_invites?code", () => ({
       json: [
@@ -89,6 +91,15 @@ test("SECURITY (TOCTOU): the same invite code can be redeemed twice under concur
         },
       ],
     }))
+    .on("care_circle_invites?id", (c) => {
+      // Only the conditional claim (used_at set to a timestamp) is gated.
+      if (c.method === "PATCH" && (c.body || "").includes('"used_at":"')) {
+        if (claimed) return { json: [] }; // already claimed -> loser
+        claimed = true;
+        return { json: [{ id: "inv1" }] }; // winner
+      }
+      return { json: [{ id: "inv1" }] };
+    })
     .on("/auth/v1/admin/users", (c) => {
       if (c.method === "POST") {
         usersCreated++;
@@ -103,7 +114,6 @@ test("SECURITY (TOCTOU): the same invite code can be redeemed twice under concur
       }
       return undefined;
     })
-    .on("care_circle_invites?id", () => ({ json: {} }))
     .on("/auth/v1/token", () => ({ json: { access_token: "at", refresh_token: "rt", expires_at: 999 } }));
 
   const mk = (email: string) =>
@@ -115,12 +125,10 @@ test("SECURITY (TOCTOU): the same invite code can be redeemed twice under concur
     );
 
   const [r1, r2] = await Promise.all([mk("a@x.com"), mk("b@x.com")]);
-  const b1 = await readJson(r1);
-  const b2 = await readJson(r2);
+  const statuses = [(await readJson(r1)).status, (await readJson(r2)).status].sort();
 
-  assert.equal(b1.status, 200);
-  assert.equal(b2.status, 200);
-  // Both redemptions succeeded from a single invite → replay/over-redemption.
-  assert.equal(usersCreated, 2, "single-use invite created two accounts");
-  assert.equal(circleRows, 2, "single-use invite produced two circle memberships");
+  // Exactly one 200 and one 410 — the loser is rejected before creating an account.
+  assert.deepEqual(statuses, [200, 410], "one redemption succeeds, the other is rejected 410");
+  assert.equal(usersCreated, 1, "single-use invite must create exactly one account");
+  assert.equal(circleRows, 1, "single-use invite must produce exactly one circle membership");
 });

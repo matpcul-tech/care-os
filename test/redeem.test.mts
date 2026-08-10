@@ -130,8 +130,10 @@ test("POST happy path creates user, links circle, marks invite used, returns ses
       c.method === "POST" ? { json: [{ id: "cc1", patient_id: "patient-1" }] } : undefined,
     )
     .on("care_circle_invites?id", (c) => {
-      if (c.method === "PATCH" && (c.body || "").includes("used_at")) inviteUsedPatched = true;
-      return { json: {} };
+      // The atomic claim is a conditional PATCH setting used_at to a
+      // timestamp; model the winning UPDATE by returning a non-empty row set.
+      if (c.method === "PATCH" && (c.body || "").includes('"used_at":"')) inviteUsedPatched = true;
+      return { json: [{ id: "inv1" }] };
     })
     .on("/auth/v1/token", () => ({ json: { access_token: "at", refresh_token: "rt", expires_at: 999 } }));
   const res = await POST(
@@ -145,7 +147,12 @@ test("POST happy path creates user, links circle, marks invite used, returns ses
   assert.equal(body.ok, true);
   assert.equal(body.user.id, "new-user");
   assert.equal(body.session.access_token, "at");
-  assert.equal(inviteUsedPatched, true, "invite must be marked used to prevent replay");
+  assert.equal(inviteUsedPatched, true, "invite must be atomically claimed (used_at set)");
+  // The claim must be a conditional update guarded on used_at IS NULL.
+  const claim = stub.calls.find(
+    (c) => c.method === "PATCH" && c.url.includes("care_circle_invites?id") && c.url.includes("used_at=is.null"),
+  );
+  assert.ok(claim, "redeem must claim the invite via a used_at=is.null conditional PATCH");
 });
 
 test("POST rolls back the auth user if the circle insert fails", async () => {
@@ -163,7 +170,8 @@ test("POST rolls back the auth user if the circle insert fails", async () => {
     })
     .on("/rest/v1/care_circle", (c) =>
       c.method === "POST" ? { status: 500, text: "boom" } : undefined,
-    );
+    )
+    .on("care_circle_invites?id", () => ({ json: [{ id: "inv1" }] }));
   const res = await POST(
     makeReq("https://care/api/circle/redeem", {
       method: "POST",
@@ -173,6 +181,11 @@ test("POST rolls back the auth user if the circle insert fails", async () => {
   const { status } = await readJson(res);
   assert.equal(status, 500);
   assert.equal(deletedUser, true, "orphaned auth user must be cleaned up on circle-insert failure");
+  // The claim must be released so the invite is reusable after the failure.
+  const released = stub.calls.some(
+    (c) => c.method === "PATCH" && c.url.includes("care_circle_invites?id") && (c.body || "").includes('"used_at":null'),
+  );
+  assert.ok(released, "a failed redemption must release its invite claim");
 });
 
 test("POST maps duplicate-email auth error to 409", async () => {
@@ -181,7 +194,8 @@ test("POST maps duplicate-email auth error to 409", async () => {
     .on("care_circle_invites?code", () => ({ json: [inviteRow()] }))
     .on("/auth/v1/admin/users", (c) =>
       c.method === "POST" ? { status: 422, text: "User already registered" } : undefined,
-    );
+    )
+    .on("care_circle_invites?id", () => ({ json: [{ id: "inv1" }] }));
   const res = await POST(
     makeReq("https://care/api/circle/redeem", {
       method: "POST",
@@ -191,4 +205,9 @@ test("POST maps duplicate-email auth error to 409", async () => {
   const { status, body } = await readJson(res);
   assert.equal(status, 409);
   assert.match(body.error, /already exists/);
+  // A duplicate-email failure must also release the claim (didn't consume it).
+  const released = stub.calls.some(
+    (c) => c.method === "PATCH" && c.url.includes("care_circle_invites?id") && (c.body || "").includes('"used_at":null'),
+  );
+  assert.ok(released, "duplicate-email redemption must release its invite claim");
 });
