@@ -59,6 +59,26 @@ export async function checkRateLimit(rule: RateLimitRule, key: string): Promise<
   }
 }
 
+/**
+ * Clear a counter (e.g. reset a per-email failed-login lockout after a
+ * successful sign-in). Best-effort; never throws.
+ */
+export async function resetRateLimit(name: string, key: string): Promise<void> {
+  if (!SUPABASE_URL || !SERVICE_ROLE) return;
+  try {
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/rate_limits?key=eq.${encodeURIComponent(`${name}:${key}`)}`,
+      {
+        method: 'DELETE',
+        headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
+        cache: 'no-store',
+      },
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Standard 429 response with a Retry-After hint, CORS-safe headers merged in. */
 export function tooManyRequests(
   rule: RateLimitRule,

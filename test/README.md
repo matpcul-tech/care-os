@@ -182,6 +182,49 @@ Tests (`rate-limit.test.mts`, plus 429 cases in `shield.test.mts` and
 fail-open on limiter error, and that an over-limit caller is rejected 429
 *before* the model call / invite lookup / account creation.
 
+## MFA + auth hardening
+
+Adds a TOTP second factor and hardens the sign-in path. Suite is now
+**132/132 passing**, `tsc` clean, `next build` clean.
+
+### Password policy
+`src/lib/password-policy.ts` — 12–128 chars, ≥3 character classes, blocks a
+common-password list and any value containing the email local-part or member
+name. Enforced server-side in `redeem` and mirrored in the signup UI. Tests:
+`password-policy.test.mts`.
+
+### TOTP (RFC 6238)
+`src/lib/totp.ts` — base32, HOTP/TOTP (HMAC-SHA1, 6 digits, 30 s), constant-
+time verify with ±1 step skew, otpauth URI. Verified against the canonical
+**RFC 4226 test vectors**. Tests: `totp.test.mts`.
+
+### MFA enrollment & storage
+Migration `20260508000004_user_mfa.sql` — `user_mfa` holds the TOTP secret
+**AES-256-GCM-encrypted** (VAULT_KEY_HEX, never plaintext) and backup codes as
+**SHA-256 hashes only**; service-role access only. Routes (`/api/auth/mfa/*`):
+`enroll` → `activate` (verifies first code, issues 10 one-time backup codes) →
+`status` / `disable` (disable requires a valid code, so a single-factor
+session can't strip MFA). All rate-limited. Tests: `mfa.test.mts` — real
+enroll→activate→verify flow, wrong-code rejection, backup-code single-use,
+enable-guard, disable-guard.
+
+### Hardened login (`/api/auth/login`)
+Replaces the browser's direct Supabase password grant. Adds:
+- **per-IP throttle** (30/min) and **per-email lockout** (5 failures/15 min,
+  reset on success);
+- **generic errors** — never reveals whether an email exists;
+- **MFA gating** — when the member has MFA, the session is *withheld* and an
+  encrypted, 5-minute `mfa_token` is returned; `/api/auth/mfa/login-verify`
+  exchanges it (plus a TOTP or backup code) for the real session.
+
+The login and signup pages are wired to the new flow (second-factor prompt +
+enrollment card in FamilyPage). Tests: `login.test.mts` — success, generic
+401, MFA gating (session withheld), IP + email lockout, failure-counter reset.
+
+> **Note:** MFA here is app-enforced at the login proxy, independent of
+> Supabase's own MFA feature. Tokens still live in `localStorage` (unchanged);
+> moving them to httpOnly cookies remains a recommended follow-up.
+
 ## Findings (as originally verified by test)
 
 ### F1 — CRITICAL: `/api/shield` quadratic-complexity DoS, unauthenticated

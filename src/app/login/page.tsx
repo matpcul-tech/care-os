@@ -33,17 +33,6 @@ interface SupabaseTokenResponse {
   user: { id: string };
 }
 
-interface SupabaseAuthError {
-  error_description?: string;
-  msg?: string;
-  message?: string;
-}
-
-type LookupResult =
-  | { kind: 'row'; row: CareCircleRow }
-  | { kind: 'no_row' }
-  | { kind: 'query_failed'; status: number; body: string };
-
 const card: React.CSSProperties = {
   background: 'rgba(255,255,255,.04)',
   border: '1px solid rgba(0,212,184,.14)',
@@ -110,54 +99,6 @@ async function refreshSession(s: CCSession): Promise<CCSession | null> {
   return updated;
 }
 
-async function fetchCircle(
-  accessToken: string,
-  userId: string,
-  select: string,
-): Promise<{ ok: true; rows: CareCircleRow[] } | { ok: false; status: number; body: string }> {
-  const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/care_circle?member_user_id=eq.${userId}&select=${select}&limit=1`,
-    {
-      headers: { apikey: ANON_KEY, Authorization: `Bearer ${accessToken}` },
-      cache: 'no-store',
-    },
-  );
-  if (!r.ok) {
-    const body = await r.text().catch(() => '');
-    return { ok: false, status: r.status, body: body.slice(0, 240) };
-  }
-  const rows = (await r.json()) as CareCircleRow[];
-  return { ok: true, rows };
-}
-
-// After password login, look up the family member's care_circle row.
-// First tries the full select (patient_id + patient_name). If Postgres
-// 400s on a missing column (migration not yet applied in prod), falls
-// back to a patient_id-only select so login still completes. Returns
-// a discriminated result so the UI can show the real reason instead of
-// a generic message.
-async function lookupCircle(
-  accessToken: string,
-  userId: string,
-): Promise<LookupResult> {
-  const full = await fetchCircle(accessToken, userId, 'patient_id,patient_name');
-  if (full.ok) {
-    return full.rows[0] ? { kind: 'row', row: full.rows[0] } : { kind: 'no_row' };
-  }
-  // 400 from PostgREST on an unknown column reads "column ... does not exist".
-  // Retry without patient_name so a missing migration isn't a blocker.
-  const looksLikeMissingColumn =
-    full.status === 400 && /column|patient_name/i.test(full.body);
-  if (looksLikeMissingColumn) {
-    const minimal = await fetchCircle(accessToken, userId, 'patient_id');
-    if (minimal.ok) {
-      return minimal.rows[0] ? { kind: 'row', row: minimal.rows[0] } : { kind: 'no_row' };
-    }
-    return { kind: 'query_failed', status: minimal.status, body: minimal.body };
-  }
-  return { kind: 'query_failed', status: full.status, body: full.body };
-}
-
 export default function LoginPage() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
@@ -165,6 +106,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // MFA step: when the login proxy returns mfa_required, we hold the opaque
+  // token and switch to a code prompt.
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [code, setCode] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -192,6 +137,34 @@ export default function LoginPage() {
     };
   }, [router]);
 
+  // Persist the resolved session and enter the app. `circle` may be null when
+  // the account has no linked Care Circle yet.
+  const finalizeLogin = useCallback(
+    (
+      s: { access_token: string; refresh_token: string; expires_at: number; user_id: string },
+      circle: CareCircleRow | null,
+    ) => {
+      if (!circle) {
+        setError(
+          'You are signed in, but no Care Circle is linked to this email. ' +
+            'Ask the patient to send you an invite link, then open that link to join.',
+        );
+        return;
+      }
+      const session: CCSession = {
+        access_token: s.access_token,
+        refresh_token: s.refresh_token,
+        expires_at: s.expires_at,
+        user_id: s.user_id,
+        patient_id: circle.patient_id,
+        patient_name: circle.patient_name ?? null,
+      };
+      window.localStorage.setItem('cc-session', JSON.stringify(session));
+      router.replace('/app');
+    },
+    [router],
+  );
+
   const submit = useCallback(async () => {
     if (submitting) return;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
@@ -206,66 +179,61 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      const tokenRes = await fetch(
-        `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', apikey: ANON_KEY },
-          body: JSON.stringify({
-            email: email.trim().toLowerCase(),
-            password,
-          }),
-        },
-      );
-
-      if (!tokenRes.ok) {
-        const errBody = (await tokenRes.json().catch(() => ({}))) as SupabaseAuthError;
-        const msg =
-          errBody.error_description ||
-          errBody.msg ||
-          errBody.message ||
-          'Login failed. Check your email and password.';
-        setError(msg);
+      const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setError(d.error || 'Login failed. Check your email and password.');
         return;
       }
-
-      const data = (await tokenRes.json()) as SupabaseTokenResponse;
-
-      const result = await lookupCircle(data.access_token, data.user.id);
-
-      if (result.kind === 'no_row') {
-        setError(
-          'You are signed in, but no Care Circle is linked to this email. ' +
-            'Ask the patient to send you an invite link, then open that link to join.',
-        );
+      if (d.mfa_required) {
+        setMfaToken(d.mfa_token);
+        setError(null);
         return;
       }
-
-      if (result.kind === 'query_failed') {
-        setError(
-          `Sign-in succeeded but the Care Circle lookup failed (status ${result.status}). ` +
-            `Send this to support: "${result.body || 'no body'}"`,
-        );
-        return;
-      }
-
-      const cc = result.row;
-      const session: CCSession = {
-        access_token: data.access_token,
-        refresh_token: data.refresh_token,
-        expires_at: data.expires_at,
-        user_id: data.user.id,
-        patient_id: cc.patient_id,
-        patient_name: cc.patient_name ?? null,
-      };
-      window.localStorage.setItem('cc-session', JSON.stringify(session));
-      router.replace('/app');
+      finalizeLogin(d.session, d.circle ?? null);
     } catch {
       setError('Network error. Please try again.');
     } finally {
       setSubmitting(false);
     }
-  }, [email, password, submitting, router]);
+  }, [email, password, submitting, finalizeLogin]);
+
+  const verifyMfa = useCallback(async () => {
+    if (submitting || !mfaToken) return;
+    const clean = code.replace(/\s/g, '');
+    if (clean.length < 6) {
+      setError('Enter the 6-digit code from your authenticator (or a backup code).');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const r = await fetch('/api/auth/mfa/login-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mfa_token: mfaToken, code: clean }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        // An expired pending-login token means we must restart the flow.
+        if (r.status === 401 && /expired|invalid session/i.test(d.error || '')) {
+          setMfaToken(null);
+          setCode('');
+        }
+        setError(d.error || 'Invalid code.');
+        return;
+      }
+      finalizeLogin(d.session, d.circle ?? null);
+    } catch {
+      setError('Network error. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [submitting, mfaToken, code, finalizeLogin]);
 
   if (checking) {
     return (
@@ -353,27 +321,48 @@ export default function LoginPage() {
         </h1>
 
         <div style={card}>
-          <span style={label}>Email</span>
-          <input
-            style={input}
-            type="email"
-            autoComplete="email"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
-          />
+          {!mfaToken ? (
+            <>
+              <span style={label}>Email</span>
+              <input
+                style={input}
+                type="email"
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+              />
 
-          <span style={label}>Password</span>
-          <input
-            style={input}
-            type="password"
-            autoComplete="current-password"
-            placeholder=""
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
-          />
+              <span style={label}>Password</span>
+              <input
+                style={input}
+                type="password"
+                autoComplete="current-password"
+                placeholder=""
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+              />
+            </>
+          ) : (
+            <>
+              <span style={label}>Two-factor code</span>
+              <input
+                style={{ ...input, fontFamily: T, letterSpacing: '.3em', textAlign: 'center', fontSize: 18 }}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                autoFocus
+                placeholder="123456"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') verifyMfa(); }}
+              />
+              <div style={{ fontSize: 11, color: '#7a9bbf', lineHeight: 1.6, marginBottom: 4 }}>
+                Enter the 6-digit code from your authenticator app, or one of your backup codes.
+              </div>
+            </>
+          )}
 
           {error && (
             <div
@@ -392,7 +381,7 @@ export default function LoginPage() {
           )}
 
           <button
-            onClick={submit}
+            onClick={mfaToken ? verifyMfa : submit}
             disabled={submitting}
             style={{
               width: '100%',
@@ -409,18 +398,29 @@ export default function LoginPage() {
               boxShadow: '0 0 20px rgba(0,212,184,.3)',
             }}
           >
-            {submitting ? 'Signing in...' : 'Sign in'}
+            {submitting ? (mfaToken ? 'Verifying...' : 'Signing in...') : mfaToken ? 'Verify code' : 'Sign in'}
           </button>
 
-          <p style={{ marginTop: 18, fontSize: 11, color: '#7a9bbf', textAlign: 'center', lineHeight: 1.6 }}>
-            New here?{' '}
-            <Link
-              href="/signup"
-              style={{ color: '#00d4b8', textDecoration: 'underline', textUnderlineOffset: 3 }}
-            >
-              Use your invite code to sign up
-            </Link>
-          </p>
+          {mfaToken ? (
+            <p style={{ marginTop: 18, fontSize: 11, color: '#7a9bbf', textAlign: 'center', lineHeight: 1.6 }}>
+              <button
+                onClick={() => { setMfaToken(null); setCode(''); setError(null); }}
+                style={{ background: 'none', border: 'none', color: '#00d4b8', textDecoration: 'underline', textUnderlineOffset: 3, cursor: 'pointer', fontFamily: O, fontSize: 11 }}
+              >
+                Cancel and start over
+              </button>
+            </p>
+          ) : (
+            <p style={{ marginTop: 18, fontSize: 11, color: '#7a9bbf', textAlign: 'center', lineHeight: 1.6 }}>
+              New here?{' '}
+              <Link
+                href="/signup"
+                style={{ color: '#00d4b8', textDecoration: 'underline', textUnderlineOffset: 3 }}
+              >
+                Use your invite code to sign up
+              </Link>
+            </p>
+          )}
         </div>
       </div>
     </div>

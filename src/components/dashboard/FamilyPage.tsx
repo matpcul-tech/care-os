@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { T, O, PAGE_PAD, SECTION_LABEL, CARD_BG, CARD_BORDER } from './ui';
+import MfaCard from './MfaCard';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -652,6 +653,10 @@ export default function FamilyPage() {
           </div>
         </div>
       </div>
+
+      {/* Account security: two-factor authentication */}
+      <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Account security</div>
+      <MfaCard session={session} />
 
       {/* Vitals row from CareIQ Shield */}
       <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Latest vitals</div>

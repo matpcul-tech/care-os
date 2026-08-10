@@ -55,7 +55,7 @@ test("rate limit: over-limit POST is throttled 429 before account creation", asy
   const res = await POST(
     makeReq("https://care/api/circle/redeem", {
       method: "POST",
-      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "longenough", member_name: "Fam" }),
+      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "Str0ng-Passphrase!", member_name: "Fam" }),
     }),
   );
   const { status } = await readJson(res);
@@ -109,7 +109,7 @@ test("POST rejects a short password before creating anything", async () => {
   );
   const { status, body } = await readJson(res);
   assert.equal(status, 400);
-  assert.match(body.error, /at least 8/);
+  assert.match(body.error, /at least 12/);
   // No auth-user creation should have been attempted.
   assert.equal(stub.calls.some((c) => c.url.includes("/auth/v1/admin/users")), false);
 });
@@ -119,7 +119,7 @@ test("POST rejects an invalid email", async () => {
   const res = await POST(
     makeReq("https://care/api/circle/redeem", {
       method: "POST",
-      body: JSON.stringify({ code: "ABCDEFGH", email: "nope", password: "longenough", member_name: "Fam" }),
+      body: JSON.stringify({ code: "ABCDEFGH", email: "nope", password: "Str0ng-Passphrase!", member_name: "Fam" }),
     }),
   );
   const { status, body } = await readJson(res);
@@ -133,7 +133,7 @@ test("POST on an expired invite returns 410 and creates no user", async () => {
   const res = await POST(
     makeReq("https://care/api/circle/redeem", {
       method: "POST",
-      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "longenough", member_name: "Fam" }),
+      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "Str0ng-Passphrase!", member_name: "Fam" }),
     }),
   );
   const { status } = await readJson(res);
@@ -163,7 +163,7 @@ test("POST happy path creates user, links circle, marks invite used, returns ses
   const res = await POST(
     makeReq("https://care/api/circle/redeem", {
       method: "POST",
-      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "longenough", member_name: "Fam" }),
+      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "Str0ng-Passphrase!", member_name: "Fam" }),
     }),
   );
   const { status, body } = await readJson(res);
@@ -199,7 +199,7 @@ test("POST rolls back the auth user if the circle insert fails", async () => {
   const res = await POST(
     makeReq("https://care/api/circle/redeem", {
       method: "POST",
-      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "longenough", member_name: "Fam" }),
+      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "Str0ng-Passphrase!", member_name: "Fam" }),
     }),
   );
   const { status } = await readJson(res);
@@ -236,7 +236,7 @@ async function redeemAndCaptureRole(
   const res = await POST(
     makeReq("https://care/api/circle/redeem", {
       method: "POST",
-      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "longenough", member_name: "Fam", ...bodyExtra }),
+      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "Str0ng-Passphrase!", member_name: "Fam", ...bodyExtra }),
     }),
   );
   await readJson(res);
@@ -274,7 +274,7 @@ test("POST maps duplicate-email auth error to 409", async () => {
   const res = await POST(
     makeReq("https://care/api/circle/redeem", {
       method: "POST",
-      body: JSON.stringify({ code: "ABCDEFGH", email: "dupe@x.com", password: "longenough", member_name: "Fam" }),
+      body: JSON.stringify({ code: "ABCDEFGH", email: "dupe@x.com", password: "Str0ng-Passphrase!", member_name: "Fam" }),
     }),
   );
   const { status, body } = await readJson(res);

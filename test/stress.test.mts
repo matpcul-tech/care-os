@@ -120,7 +120,7 @@ test("F5 fixed (TOCTOU): concurrent redemptions of one code — exactly one wins
     redeem.POST(
       makeReq("https://care/api/circle/redeem", {
         method: "POST",
-        body: JSON.stringify({ code: "ABCDEFGH", email, password: "longenough", member_name: "Fam" }),
+        body: JSON.stringify({ code: "ABCDEFGH", email, password: "Str0ng-Passphrase!", member_name: "Fam" }),
       }),
     );
 

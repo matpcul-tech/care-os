@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkRateLimit, clientIp } from '@/lib/rate-limit';
+import { validatePassword } from '@/lib/password-policy';
 
 export const runtime = 'edge';
 
@@ -275,8 +276,9 @@ export async function POST(req: NextRequest) {
 
     if (!code) return bad('code required');
     if (!isEmail(email)) return bad('valid email required');
-    if (password.length < 8) return bad('password must be at least 8 characters');
     if (!member_name) return bad('member_name required');
+    const pw = validatePassword(password, { email, name: member_name });
+    if (!pw.ok) return bad(pw.reason || 'password does not meet requirements');
 
     const { invite, status, bodyText } = await lookupInvite(code);
     if (status !== 200) {
