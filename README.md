@@ -11,6 +11,17 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000)
 
+Copy `.env.example` to `.env.local` and fill in the values. Providers for AI,
+email, and SMS are swappable by env (`LLM_PROVIDER`, `EMAIL_PROVIDER`,
+`SMS_PROVIDER`) — including a self-hosted local model via `LLM_PROVIDER=openai`.
+
+## Self-hosting the data layer
+
+To run Supabase (Postgres / auth / storage) yourself instead of the managed
+cloud, see [`self-host/`](./self-host/README.md) — a Docker Compose stack that
+serves the identical API surface so the app's migrations and RLS run
+unchanged. Point `NEXT_PUBLIC_SUPABASE_URL` at your gateway.
+
 ## Deploy to Vercel
 
 ```bash
