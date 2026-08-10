@@ -22,6 +22,15 @@ cloud, see [`self-host/`](./self-host/README.md) — a Docker Compose stack that
 serves the identical API surface so the app's migrations and RLS run
 unchanged. Point `NEXT_PUBLIC_SUPABASE_URL` at your gateway.
 
+The app also ships a `Dockerfile` (standalone Next.js output). Run it
+alongside the self-hosted stack — one host, one network, one BAA — with the
+app overlay:
+
+```bash
+cd self-host
+docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build
+```
+
 ## Deploy to Vercel
 
 ```bash

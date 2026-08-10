@@ -83,6 +83,47 @@ decrypts existing vault files and MFA secrets.
 Nothing else in the app changes: every route already talks to Supabase over
 `SUPABASE_URL` with the anon/service keys.
 
+## Run the CareCircle app in the same stack (one host, one BAA)
+
+To host the app container *next to* the database — same machine, same Docker
+network, one infrastructure BAA — use the app overlay. The image is built from
+the repo root (`../Dockerfile`, standalone Next.js output).
+
+```bash
+# 1. App runtime secrets (VAULT_KEY_HEX, AI/email/SMS provider keys, signing key).
+cp app.env.example app.env      # then fill it in
+
+# 2. Build + start everything together.
+docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build
+
+# 3. First time only, apply migrations (same as before).
+./scripts/apply-migrations.sh
+```
+
+The app is now on `:3000`, Supabase on `:8000`, sharing one network.
+`SUPABASE_SERVICE_ROLE_KEY` and the `NEXT_PUBLIC_*` values are injected from
+the stack's `.env`; the rest come from `app.env`.
+
+### ⚠️ The `NEXT_PUBLIC_SUPABASE_URL` reachability rule
+
+`NEXT_PUBLIC_SUPABASE_URL` is **baked into the browser bundle at build time**
+and is *also* used by the app's server routes. It must therefore be **one URL
+reachable by both the browser and the app container** — your **public gateway
+URL** (`API_EXTERNAL_URL`), not an internal Docker name and not `localhost`:
+
+- **Production (correct):** put TLS in front and route two hostnames to the
+  two services — `app.yourdomain → app:3000`, `api.yourdomain → gateway:8000`.
+  Set `API_EXTERNAL_URL=https://api.yourdomain`. The browser and the app
+  container both resolve it; done.
+- **`localhost` will NOT work** for the container: inside the app container
+  `http://localhost:8000` is the container's own localhost, not the gateway.
+  For a quick local trial without a domain, set `API_EXTERNAL_URL` to the
+  host's LAN IP (e.g. `http://192.168.1.10:8000`) so both sides can reach it.
+
+Because that URL is compiled in, **rebuild the app image when it changes**
+(`--build`). Server-only secrets are runtime env, so those you can change with
+just a restart.
+
 ## What this includes (and doesn't)
 
 Included, because the app uses them: **Postgres, GoTrue, PostgREST, Storage**,

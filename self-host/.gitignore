@@ -1,4 +1,5 @@
 # Never commit real secrets or local data.
 .env
+app.env
 volumes/db/data/
 volumes/storage/data/
