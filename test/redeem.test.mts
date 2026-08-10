@@ -39,6 +39,30 @@ test("GET validates a good code", async () => {
   assert.equal(body.patient_name, "Mary");
 });
 
+test("rate limit: brute-force GET is throttled 429 before any invite lookup", async () => {
+  stub.reset();
+  stub.on("/rest/v1/rpc/rate_limit_hit", () => ({ json: false }));
+  stub.on("care_circle_invites?code", () => ({ json: [inviteRow()] }));
+  const res = await GET(makeReq("https://care/api/circle/redeem?code=ABCDEFGH"));
+  const { status } = await readJson(res);
+  assert.equal(status, 429);
+  assert.equal(stub.calls.some((c) => c.url.includes("care_circle_invites?code")), false);
+});
+
+test("rate limit: over-limit POST is throttled 429 before account creation", async () => {
+  stub.reset();
+  stub.on("/rest/v1/rpc/rate_limit_hit", () => ({ json: false }));
+  const res = await POST(
+    makeReq("https://care/api/circle/redeem", {
+      method: "POST",
+      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "longenough", member_name: "Fam" }),
+    }),
+  );
+  const { status } = await readJson(res);
+  assert.equal(status, 429);
+  assert.equal(stub.calls.some((c) => c.url.includes("/auth/v1/admin/users")), false);
+});
+
 test("GET on an expired invite returns 410", async () => {
   stub.reset();
   stub.on("care_circle_invites?code", () => ({ json: [inviteRow({ expires_at: past })] }));

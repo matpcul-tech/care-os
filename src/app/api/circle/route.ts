@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { bearerToken, getUserId, isPatientOrMember } from '@/lib/api-auth';
+import { checkRateLimit, clientIp } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
+
+const RATE_LIMIT = { name: 'circle', max: 60, windowSeconds: 60 };
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -99,7 +102,7 @@ async function sendInviteEmail(args: {
     </a>
   </p>
   <p style="font-size:12px;color:#666;margin-top:24px">
-    Sent by CareCircle, protected by the Sovereign Prompt Shield. Alerts never include raw PHI.
+    Sent by CareCircle. Health alerts name the metric and guidance only — never raw lab values.
   </p>
 </div>`.trim();
 
@@ -121,6 +124,10 @@ async function sendInviteEmail(args: {
 
 export async function GET(req: NextRequest) {
   try {
+    if (!(await checkRateLimit(RATE_LIMIT, clientIp(req)))) {
+      return bad('rate limit exceeded, please slow down', 429);
+    }
+
     const url = new URL(req.url);
     const patientId = url.searchParams.get('patient_id') || url.searchParams.get('patientId');
     if (!patientId) return bad('patient_id required');
@@ -143,6 +150,10 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    if (!(await checkRateLimit(RATE_LIMIT, clientIp(req)))) {
+      return bad('rate limit exceeded, please slow down', 429);
+    }
+
     const body = (await req.json()) as AddMemberBody;
     const patientId = body.patient_id || body.patientId;
     const member_email = (body.member_email || '').trim().toLowerCase();

@@ -140,6 +140,48 @@ API endpoint or a DB audit extension / log drain (pgAudit); tracked as
 follow-up. Tests: `audit.test.mts` plus emission assertions in
 `vault-roles.test.mts`, `shield.test.mts`, `alerts.test.mts`.
 
+## Accurate Shield wording + rate limiting
+
+Two follow-ups after the role/audit work. Suite is now **103/103 passing**,
+`tsc` clean, `next build` clean.
+
+### Shield wording (truth-in-advertising)
+
+The "Sovereign Prompt Shield" was described across the app as de-identifying
+PHI ("PHI has been replaced with protected tokens", "never reaches a
+commercial server in readable form", "ZK Shield", "HIPAA-compliant
+infrastructure"). In reality it regex-redacts five identifier patterns (SSN,
+phone, DOB, MRN, dates) and still sends everything else — names, clinical
+details — to a third-party model. All user-facing and system-prompt copy was
+rewritten to state what it actually does: server-side redaction of common
+direct identifiers, *not* full de-identification, with data sent to an
+external provider over TLS. Touched: shield system prompt + `action` label
+(`PII_BLOCKED` → `PII_REDACTED`, `shieldVersion` de-`ZK`'d), landing page,
+ShieldPage, AIPage, signup, alert/invite email + SMS footers, and the
+CareCircleApp banner.
+
+### Rate limiting
+
+Migration `20260508000003_rate_limits.sql` adds a `rate_limits` table and an
+atomic fixed-window `rate_limit_hit(key, max, window)` RPC (shared state
+across serverless/edge instances). `src/lib/rate-limit.ts` wraps it
+(**fail-open** — a limiter outage never blocks core flows). Applied to:
+
+| Route | Key | Limit |
+|---|---|---|
+| `/api/shield` | user id | 30 / min |
+| `/api/circle/redeem` GET | IP | 30 / min |
+| `/api/circle/redeem` POST | IP | 10 / min |
+| `/api/circle/generate-invite` | user id | 20 / min |
+| `/api/circle` GET/POST | IP | 60 / min |
+| `/api/circle/update-nickname` | user id | 30 / min |
+| `/api/alerts` | patient id | 120 / min |
+
+Tests (`rate-limit.test.mts`, plus 429 cases in `shield.test.mts` and
+`redeem.test.mts`) verify allow/deny passthrough, the composed key + params,
+fail-open on limiter error, and that an over-limit caller is rejected 429
+*before* the model call / invite lookup / account creation.
+
 ## Findings (as originally verified by test)
 
 ### F1 — CRITICAL: `/api/shield` quadratic-complexity DoS, unauthenticated

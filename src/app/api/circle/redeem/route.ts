@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { checkRateLimit, clientIp } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
+
+// Invite codes are 8 chars from a 32-char alphabet. Rate-limit by IP to make
+// brute-forcing a valid code over the validate (GET) and redeem (POST)
+// endpoints impractical.
+const RL_GET = { name: 'redeem-get', max: 30, windowSeconds: 60 };
+const RL_POST = { name: 'redeem-post', max: 10, windowSeconds: 60 };
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -201,6 +208,10 @@ export async function GET(req: NextRequest) {
       return bad('server misconfigured', 500, { env: envErr });
     }
 
+    if (!(await checkRateLimit(RL_GET, clientIp(req)))) {
+      return bad('rate limit exceeded, please slow down', 429);
+    }
+
     const url = new URL(req.url);
     const code = (url.searchParams.get('code') || '').trim().toUpperCase();
     if (!code) return bad('code required');
@@ -247,6 +258,10 @@ export async function POST(req: NextRequest) {
     if (envErr) {
       console.error('[redeem POST] env', envErr);
       return bad('server misconfigured', 500, { env: envErr });
+    }
+
+    if (!(await checkRateLimit(RL_POST, clientIp(req)))) {
+      return bad('rate limit exceeded, please slow down', 429);
     }
 
     const body = (await req.json()) as RedeemBody;

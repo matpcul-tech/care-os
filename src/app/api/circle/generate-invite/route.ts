@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
+
+const RATE_LIMIT = { name: 'generate-invite', max: 20, windowSeconds: 60 };
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -75,6 +78,10 @@ export async function POST(req: NextRequest) {
   try {
     const user = await getUserFromAuthHeader(req);
     if (!user) return bad('authentication required', 401);
+
+    if (!(await checkRateLimit(RATE_LIMIT, user.id))) {
+      return bad('rate limit exceeded, please slow down', 429);
+    }
 
     let body: GenerateInviteBody = {};
     try {

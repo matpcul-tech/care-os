@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { logPhiAccess, requestContext } from '@/lib/audit';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
+
+const RATE_LIMIT = { name: 'alerts', max: 120, windowSeconds: 60 };
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -240,8 +243,7 @@ async function sendAlertEmail(args: {
   <ul style="padding-left:18px;margin:12px 0">${items}</ul>
   <p style="font-size:12px;color:#666;margin-top:24px;padding-top:12px;border-top:1px solid #eee">
     Patient reference: <code>${args.patientId}</code><br>
-    No raw values or personal information are included. Sign in to CareCircle for full context.<br>
-    Protected by the Sovereign Prompt Shield.
+    This alert names the metric and guidance only — no raw lab values. Sign in to CareCircle for full context.
   </p>
 </div>`.trim();
 
@@ -299,7 +301,7 @@ function buildSmsBody(patientRef: string, criticalFlags: Flag[]): string {
   for (const f of criticalFlags) {
     lines.push(`* ${f.metric}: ${f.recommendation}`);
   }
-  lines.push('Sign in to CareCircle for details. No PHI in this message.');
+  lines.push('Sign in to CareCircle for details. No lab values in this message.');
   const body = lines.join('\n');
   return body.length > 1500 ? `${body.slice(0, 1497)}...` : body;
 }
@@ -393,6 +395,11 @@ export async function POST(req: NextRequest) {
 
     const patientId = body.patient_id || body.patientId;
     if (!patientId) return bad('patient_id required');
+
+    // Throttle per patient to bound alert-dispatch floods.
+    if (!(await checkRateLimit(RATE_LIMIT, patientId))) {
+      return bad('rate limit exceeded, please slow down', 429);
+    }
 
     // ----- Authenticate EVERY alert request via the CareIQ HMAC signature.
     // Alerts fan out real emails and SMS to a patient's care circle, so every

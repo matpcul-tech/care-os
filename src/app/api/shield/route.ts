@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { bearerToken, getUserId } from '@/lib/api-auth';
 import { logPhiAccess, requestContext } from '@/lib/audit';
+import { checkRateLimit, tooManyRequests } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
+
+const RATE_LIMIT = { name: 'shield', max: 30, windowSeconds: 60 };
 
 // Bound the work per request. The scan is unauthenticated-abuse-proofed by
 // the auth gate below, but we still cap input so a single authenticated
@@ -38,7 +41,7 @@ function serverScan(text: string) {
   return { flags, sanitized, riskScore: Math.min(riskScore, 100) };
 }
 
-const SYSTEM = `You are CareCircle AI, a compassionate family care coordination assistant built by Sovereign Shield Technologies LLC for families caring for elder loved ones through Federally Qualified Health Centers. You help families manage medications, coordinate care tasks, understand clinical updates from CareIQ, and navigate elder care challenges. You speak with warmth, clarity, and respect for both the patient and their family caregivers. All patient data you receive has been processed by the Sovereign Prompt Shield — PHI has been replaced with protected tokens. Be concise, supportive, and actionable.`;
+const SYSTEM = `You are CareCircle AI, a compassionate family care coordination assistant built by Sovereign Shield Technologies LLC for families caring for elder loved ones through Federally Qualified Health Centers. You help families manage medications, coordinate care tasks, understand clinical updates from CareIQ, and navigate elder care challenges. You speak with warmth, clarity, and respect for both the patient and their family caregivers. Common direct identifiers (Social Security numbers, phone numbers, dates of birth, medical record numbers, and dates) are redacted from user messages before they reach you, but this is not full de-identification — names and clinical details may remain, so treat everything you receive as sensitive health information. Be concise, supportive, and actionable.`;
 
 export async function POST(req: NextRequest) {
   try {
@@ -47,6 +50,11 @@ export async function POST(req: NextRequest) {
     const userId = await getUserId(bearerToken(req));
     if (!userId) {
       return NextResponse.json({ error: 'authentication required' }, { status: 401 });
+    }
+
+    // Throttle per user to bound AI cost/abuse from a compromised session.
+    if (!(await checkRateLimit(RATE_LIMIT, userId))) {
+      return tooManyRequests(RATE_LIMIT);
     }
 
     const body = await req.json();
@@ -83,8 +91,8 @@ export async function POST(req: NextRequest) {
       flags: Array.from(flags),
       riskScore,
       riskLevel: riskScore >= 60 ? 'CRITICAL' : riskScore >= 30 ? 'HIGH' : riskScore >= 10 ? 'MEDIUM' : 'LOW',
-      action: flags.size > 0 ? 'PII_BLOCKED' : 'CLEAN_PASS',
-      shieldVersion: '2.0.0-ZK',
+      action: flags.size > 0 ? 'PII_REDACTED' : 'CLEAN_PASS',
+      shieldVersion: '2.1.0',
     };
 
     // Audit the AI query: an authenticated user sent (shield-sanitized) PHI

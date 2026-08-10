@@ -49,13 +49,22 @@ test("SECURITY (F2 fixed): an invalid token is rejected 401", async () => {
   assert.equal(status, 401);
 });
 
+test("rate limit: over-limit user gets 429 and never reaches the model", async () => {
+  ready();
+  stub.on("/rest/v1/rpc/rate_limit_hit", () => ({ json: false })); // limiter says: denied
+  const res = await POST(shieldReq({ messages: [{ role: "user", content: "hi" }], patientId: "p1" }));
+  const { status } = await readJson(res);
+  assert.equal(status, 429);
+  assert.equal(stub.calls.some((c) => c.url.includes("api.anthropic.com")), false);
+});
+
 test("SSN is redacted before reaching the model", async () => {
   ready();
   const res = await POST(shieldReq({ messages: [{ role: "user", content: "My SSN is 123-45-6789" }], patientId: "p1" }));
   const { body } = await readJson(res);
   assert.match(body.content, /\[SSN_PROTECTED\]/);
   assert.doesNotMatch(body.content, /123-45-6789/);
-  assert.equal(body.shield.action, "PII_BLOCKED");
+  assert.equal(body.shield.action, "PII_REDACTED");
   assert.ok(body.shield.flags.includes("SSN"));
 });
 

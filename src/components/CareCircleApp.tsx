@@ -579,8 +579,8 @@ function ZKShieldBanner() {
         />
       </svg>
       <div style={{ fontSize: 11, lineHeight: 1.55, color: SUB }}>
-        <span style={{ color: OK, fontWeight: 700 }}>ZK Shield Active.</span>{' '}
-        AES-256-GCM at rest, HIPAA-compliant infrastructure, audit logged.
+        <span style={{ color: OK, fontWeight: 700 }}>Shield Active.</span>{' '}
+        AES-256-GCM encryption at rest, role-scoped access, audit logging, and identifier redaction on AI prompts.
       </div>
     </div>
   );
@@ -2082,7 +2082,7 @@ export default function CareCircleApp() {
                   animation: 'pulse 1.5s infinite',
                 }}
               />
-              ZK Shield On
+              Shield On
             </div>
           </div>
         </div>

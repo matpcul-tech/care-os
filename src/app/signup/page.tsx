@@ -331,7 +331,7 @@ function SignupInner() {
             </button>
 
             <p style={{ marginTop: 14, fontSize: 11, color: '#7a9bbf', lineHeight: 1.6 }}>
-              By joining, you&apos;ll receive {alertLevel === 'critical' ? 'critical-only' : 'all'} health alerts about {invite.patient_name || 'your loved one'}. No raw values or PHI are included in alerts. Protected by the Sovereign Prompt Shield.
+              By joining, you&apos;ll receive {alertLevel === 'critical' ? 'critical-only' : 'all'} health alerts about {invite.patient_name || 'your loved one'}. Alerts name which metric crossed a threshold and what to do — not raw lab values. Sign in for full details.
             </p>
           </div>
         )}
