@@ -11,7 +11,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."                 # -> self-host/
 MIG_DIR="../supabase/migrations"
 DB_NAME="${POSTGRES_DB:-postgres}"
-DC="docker compose"
+# DC lets a caller (e.g. restore.sh) target a different compose project, such
+# as an isolated scratch stack. Defaults to the production stack.
+DC="${DC:-docker compose}"
 
 psql() { $DC exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d "$DB_NAME" "$@"; }
 
@@ -36,7 +38,7 @@ bucket="$(psql -tAc "select id from storage.buckets where id = 'care-circle-vaul
 if [ "$bucket" = "care-circle-vault" ]; then
   echo "OK: care-circle-vault bucket present."
 else
-  echo "WARNING: care-circle-vault bucket missing — check migration 20260505000001." >&2
+  echo "WARNING: care-circle-vault bucket missing - check migration 20260505000001." >&2
   exit 1
 fi
 

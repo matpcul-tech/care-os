@@ -1,6 +1,6 @@
 # Shared proxy settings for every upstream location.
-# (nginx forwards client request headers — Authorization, apikey, Prefer,
-# Content-Type — to the upstream automatically; we only override Host and add
+# (nginx forwards client request headers - Authorization, apikey, Prefer,
+# Content-Type - to the upstream automatically; we only override Host and add
 # forwarding context.)
 proxy_http_version 1.1;
 proxy_set_header Host $host;
