@@ -1,5 +1,8 @@
 # Cutover: managed Supabase to self-hosted (get off their logs)
 
+> Empty managed project (no real users or data)? Use FRESH-START.md instead and skip this file.
+> Populated managed project (real accounts or vault files)? Continue here.
+
 This moves CareCircle from the managed Supabase cloud onto your own stack:
 same Supabase software, your host, your logs. When it is done and verified, you
 pause and then delete the managed project.
