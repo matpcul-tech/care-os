@@ -4,5 +4,5 @@ app.env
 volumes/db/data/
 volumes/storage/data/
 
-# Migration dumps contain PHI — never commit.
+# Migration dumps contain PHI - never commit.
 dump/

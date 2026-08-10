@@ -17,7 +17,7 @@ DB_NAME="${POSTGRES_DB:-postgres}"
 DC="docker compose"
 
 load() {
-  [ -f "$1" ] || { echo "missing $1 — run export-from-managed.sh first" >&2; exit 1; }
+  [ -f "$1" ] || { echo "missing $1 - run export-from-managed.sh first" >&2; exit 1; }
   echo "Loading $1 ..."
   { echo "SET session_replication_role = replica;"; cat "$1"; } \
     | $DC exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d "$DB_NAME"

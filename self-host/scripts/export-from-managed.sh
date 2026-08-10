@@ -42,4 +42,4 @@ pg_dump "$MANAGED_DB_URL" "${common[@]}" \
   --file dump/03-storage-objects.sql
 
 echo "Done. Wrote dump/01-auth-data.sql, dump/02-public-data.sql, dump/03-storage-objects.sql"
-echo "These files contain PHI — keep them encrypted and delete after import."
+echo "These files contain PHI - keep them encrypted and delete after import."

@@ -4,7 +4,7 @@
 //   node scripts/generate-keys.mjs            # print a ready-to-paste block
 //   JWT_SECRET=... node scripts/generate-keys.mjs   # derive keys from an existing secret
 //
-// The ANON_KEY and SERVICE_ROLE_KEY are HS256 JWTs signed with JWT_SECRET —
+// The ANON_KEY and SERVICE_ROLE_KEY are HS256 JWTs signed with JWT_SECRET -
 // exactly the shape GoTrue/PostgREST/Storage expect. Keep JWT_SECRET and
 // SERVICE_ROLE_KEY secret; ANON_KEY is public.
 import crypto from 'node:crypto';

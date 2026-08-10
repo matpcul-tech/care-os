@@ -11,7 +11,7 @@
 //
 // Reads the file list from the managed project's vault_files table, downloads
 // each object, and uploads it to the self-hosted bucket (idempotent upsert).
-// Bytes are copied verbatim — still AES-256-GCM ciphertext; nothing is
+// Bytes are copied verbatim - still AES-256-GCM ciphertext; nothing is
 // decrypted here.
 const BUCKET = process.env.BUCKET || 'care-circle-vault';
 const need = ['MANAGED_URL', 'MANAGED_SERVICE_KEY', 'SELFHOST_URL', 'SELFHOST_SERVICE_KEY'];

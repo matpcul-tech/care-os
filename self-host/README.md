@@ -1,13 +1,13 @@
 # Self-hosted Supabase for CareCircle
 
 Run the data layer yourself instead of on Supabase's managed cloud. This
-stack is the **same Supabase software** the platform runs — Postgres, GoTrue
-(auth), PostgREST (`/rest`), Storage — behind an nginx gateway that exposes
+stack is the **same Supabase software** the platform runs - Postgres, GoTrue
+(auth), PostgREST (`/rest`), Storage - behind an nginx gateway that exposes
 the identical API surface (`/auth/v1`, `/rest/v1`, `/storage/v1`). Your
 existing `supabase/migrations` and RLS policies run **unchanged**; the app
 only needs `NEXT_PUBLIC_SUPABASE_URL` pointed here.
 
-> ⚠️ **This gets you a working, correct stack — not an automatically
+> ⚠️ **This gets you a working, correct stack - not an automatically
 > HIPAA-compliant one.** Self-hosting *moves* the safeguards onto you: TLS,
 > disk encryption, backups, patching, and key management are now your job.
 > Work through the **Hardening** checklist below before any real PHI, and get
@@ -16,7 +16,7 @@ only needs `NEXT_PUBLIC_SUPABASE_URL` pointed here.
 > **Already live on managed Supabase and want to cut over?** After this stack
 > is up and migrated, follow **[MIGRATION.md](./MIGRATION.md)** to move your
 > existing accounts, data, and encrypted vault files off the managed project
-> and onto your own — then decommission the managed project.
+> and onto your own - then decommission the managed project.
 
 ## Architecture
 
@@ -78,11 +78,11 @@ In the CareCircle app's `.env.local` (see the repo-root `.env.example`), set:
 NEXT_PUBLIC_SUPABASE_URL=https://api.yourdomain.example   # this gateway, behind TLS
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<ANON_KEY>
 SUPABASE_SERVICE_ROLE_KEY=<SERVICE_ROLE_KEY>
-VAULT_KEY_HEX=<64 hex chars>        # unchanged — the app's document/MFA encryption key
+VAULT_KEY_HEX=<64 hex chars>        # unchanged - the app's document/MFA encryption key
 ```
 
 `generate-keys.mjs` also prints a fresh `VAULT_KEY_HEX` you can use if you
-don't already have one. **Keep the same `VAULT_KEY_HEX` across deploys** — it
+don't already have one. **Keep the same `VAULT_KEY_HEX` across deploys** - it
 decrypts existing vault files and MFA secrets.
 
 Nothing else in the app changes: every route already talks to Supabase over
@@ -90,8 +90,8 @@ Nothing else in the app changes: every route already talks to Supabase over
 
 ## Run the CareCircle app in the same stack (one host, one BAA)
 
-To host the app container *next to* the database — same machine, same Docker
-network, one infrastructure BAA — use the app overlay. The image is built from
+To host the app container *next to* the database - same machine, same Docker
+network, one infrastructure BAA - use the app overlay. The image is built from
 the repo root (`../Dockerfile`, standalone Next.js output).
 
 ```bash
@@ -113,11 +113,11 @@ the stack's `.env`; the rest come from `app.env`.
 
 `NEXT_PUBLIC_SUPABASE_URL` is **baked into the browser bundle at build time**
 and is *also* used by the app's server routes. It must therefore be **one URL
-reachable by both the browser and the app container** — your **public gateway
+reachable by both the browser and the app container** - your **public gateway
 URL** (`API_EXTERNAL_URL`), not an internal Docker name and not `localhost`:
 
 - **Production (correct):** put TLS in front and route two hostnames to the
-  two services — `app.yourdomain → app:3000`, `api.yourdomain → gateway:8000`.
+  two services - `app.yourdomain → app:3000`, `api.yourdomain → gateway:8000`.
   Set `API_EXTERNAL_URL=https://api.yourdomain`. The browser and the app
   container both resolve it; done.
 - **`localhost` will NOT work** for the container: inside the app container
@@ -133,12 +133,12 @@ just a restart.
 
 Included, because the app uses them: **Postgres, GoTrue, PostgREST, Storage**,
 plus an optional Studio. Deliberately **not** included: Realtime, Edge
-Functions, and the analytics/logflare stack — the app uses none of them. Add
+Functions, and the analytics/logflare stack - the app uses none of them. Add
 them from the upstream Supabase compose if you need them later.
 
 The gateway does **not** enforce the hosted platform's `apikey` gate or
 per-key rate limits (auth still holds via JWT). If you want that,
-drop in Supabase's Kong config in place of nginx — the routes are identical.
+drop in Supabase's Kong config in place of nginx - the routes are identical.
 
 ## Hardening checklist (do before real PHI)
 
@@ -149,12 +149,12 @@ drop in Supabase's Kong config in place of nginx — the routes are identical.
       on an encrypted disk (LUKS, or a cloud encrypted EBS/PD). Postgres +
       file storage hold PHI in the clear at rest otherwise.
 - [ ] **Lock down the network.** The compose binds Postgres to `127.0.0.1`
-      only — keep it off the public internet. Expose *only* the TLS gateway.
+      only - keep it off the public internet. Expose *only* the TLS gateway.
       Put the containers on a private network/VPC.
-- [ ] **Secret management.** Don't leave `.env` on disk in prod — inject
+- [ ] **Secret management.** Don't leave `.env` on disk in prod - inject
       `JWT_SECRET`, `POSTGRES_PASSWORD`, `SERVICE_ROLE_KEY` from a secrets
       manager. Rotate `JWT_SECRET` deliberately (it invalidates all tokens and
-      the anon/service keys — regenerate them together).
+      the anon/service keys - regenerate them together).
 - [ ] **Backups + tested restore.** Automate `pg_dump`/`pg_basebackup` and
       back up the storage volume; encrypt the backups; test a restore. See
       below.
@@ -162,7 +162,7 @@ drop in Supabase's Kong config in place of nginx — the routes are identical.
       logs somewhere immutable and set a retention policy.
 - [ ] **Patch cadence.** Pin versions (done here) and update the images on a
       schedule; watch Supabase/Postgres CVEs.
-- [ ] **BAA with the infra host.** Self-hosting doesn't remove this — you need
+- [ ] **BAA with the infra host.** Self-hosting doesn't remove this - you need
       a signed BAA covering the machines the containers run on.
 
 ## Backups
@@ -187,7 +187,7 @@ Encrypt the resulting files (they contain PHI) and store them off-host.
 docker compose ps                 # status
 docker compose logs -f auth rest  # tail service logs
 docker compose down               # stop (keeps volumes/data)
-docker compose down -v            # stop AND DELETE all data — destructive
+docker compose down -v            # stop AND DELETE all data - destructive
 ```
 
 Re-running `./scripts/apply-migrations.sh` is safe: the migrations are written
@@ -195,17 +195,17 @@ Re-running `./scripts/apply-migrations.sh` is safe: the migrations are written
 
 ## Troubleshooting
 
-- **`apply-migrations.sh` hangs on "Waiting for auth.users"** — GoTrue hasn't
+- **`apply-migrations.sh` hangs on "Waiting for auth.users"** - GoTrue hasn't
   finished its first-run migration. `docker compose logs auth`; a common cause
   is the `supabase_auth_admin` password not matching (re-check `.env`, then
   `docker compose down -v` and start clean so initdb re-runs).
-- **App calls 401 from `/rest/v1`** — the app's `SUPABASE_SERVICE_ROLE_KEY` /
+- **App calls 401 from `/rest/v1`** - the app's `SUPABASE_SERVICE_ROLE_KEY` /
   anon key must be the ones signed with THIS stack's `JWT_SECRET`. Regenerate
   from the same secret with `scripts/generate-keys.mjs`.
-- **CORS errors in the browser** — set the gateway's allowed origin to your
+- **CORS errors in the browser** - set the gateway's allowed origin to your
   app URL (edit `$cors_origin` in `volumes/gateway/nginx.conf`) and ensure
   `SITE_URL` matches.
-- **`auth.uid()` errors / RLS denies everything** — confirm
+- **`auth.uid()` errors / RLS denies everything** - confirm
   `02-auth-helpers.sql` ran (it only runs on a fresh volume); on an existing
   volume, apply it manually:
   `docker compose exec -T db psql -U postgres -d postgres < volumes/db/init/02-auth-helpers.sql`.

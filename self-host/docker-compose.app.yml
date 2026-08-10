@@ -17,7 +17,7 @@ services:
       dockerfile: Dockerfile
       args:
         # IMPORTANT: NEXT_PUBLIC_SUPABASE_URL must be an address reachable by
-        # BOTH the browser and the app container — i.e. your PUBLIC gateway URL
+        # BOTH the browser and the app container - i.e. your PUBLIC gateway URL
         # (API_EXTERNAL_URL). See the README note before using localhost.
         NEXT_PUBLIC_SUPABASE_URL: ${API_EXTERNAL_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}

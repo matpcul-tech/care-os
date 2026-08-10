@@ -1,7 +1,7 @@
 # Self-hosted Supabase for CareCircle.
 #
-# Runs the same Supabase services the managed platform does — Postgres,
-# GoTrue (auth), PostgREST (/rest), Storage — behind an nginx gateway that
+# Runs the same Supabase services the managed platform does - Postgres,
+# GoTrue (auth), PostgREST (/rest), Storage - behind an nginx gateway that
 # path-routes /auth/v1, /rest/v1 and /storage/v1 exactly like the hosted API.
 # Your existing supabase/migrations and RLS run unchanged; the app only needs
 # NEXT_PUBLIC_SUPABASE_URL pointed at this gateway.
