@@ -344,6 +344,11 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
               />
+              <div style={{ textAlign: 'right', marginBottom: 6 }}>
+                <Link href="/reset" style={{ fontSize: 11, color: '#7a9bbf', textDecoration: 'underline', textUnderlineOffset: 3 }}>
+                  Forgot password?
+                </Link>
+              </div>
             </>
           ) : (
             <>
