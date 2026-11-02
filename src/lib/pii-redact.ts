@@ -3,7 +3,8 @@
  *
  * Regex and exact string replacement only. No ML model. This reduces
  * identifiers. It is not full de-identification: bare names the server
- * does not already know, city names, and clinical details can remain.
+ * does not already know, including untitled names outside the care
+ * circle, city names, and clinical details can remain.
  */
 
 export type PiiSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM';
@@ -39,17 +40,32 @@ interface Rule {
 // Order matters. More specific identifiers run before broader ones so a
 // tribal ID is not swallowed by the MRN rule, and a street address is
 // replaced before a 5-digit ZIP inside it could be split off.
+// Phone runs first. It already matches 10-digit numbers and 3-3-4 groups,
+// including numbers with spaces. Grouped SSNs are the 3-2-4 shape (dashes,
+// spaces, or dots), so they are not phone numbers. A bare 9-digit SSN runs
+// only after phone, email, tribal ID, and MRN, so those are not relabeled.
+// A label glued to nine digits (SSN123456789) is included there. Nine bare
+// digits must sit on a word boundary, so a longer run of digits is not cut.
 // TRIBAL_ID mirrors carecircle-sovereign, plus an optional leading
 // CDIB or CHK label so "CDIB CN-123-45678" does not leave the label behind.
 const RULES: Rule[] = [
-  { source: String.raw`\b\d{3}-\d{2}-\d{4}\b`, flags: 'g', type: 'SSN', severity: 'CRITICAL', token: '[SSN_PROTECTED]' },
   { source: String.raw`\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b`, flags: 'g', type: 'PHONE', severity: 'HIGH', token: '[PHONE_PROTECTED]' },
+  { source: String.raw`\b\d{3}(?:-|\s+|\.)\d{2}(?:-|\s+|\.)\d{4}\b`, flags: 'g', type: 'SSN', severity: 'CRITICAL', token: '[SSN_PROTECTED]' },
+  { source: String.raw`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`, flags: 'gi', type: 'EMAIL', severity: 'HIGH', token: '[EMAIL_PROTECTED]' },
   { source: String.raw`\b(dob|date of birth|born)[:\s]+\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b`, flags: 'gi', type: 'DOB', severity: 'CRITICAL', token: '[DOB_PROTECTED]' },
   { source: String.raw`\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b`, flags: 'g', type: 'DATE', severity: 'MEDIUM', token: '[DATE_PROTECTED]' },
   { source: String.raw`\b(?:(?:CDIB|CHK)\s+)?(?:CHK|CDIB|CN)[-\s]?\d{2,4}[-\s]?\d{3,6}\b`, flags: 'gi', type: 'TRIBAL_ID', severity: 'CRITICAL', token: '[TRIBAL_ID_PROTECTED]' },
   { source: String.raw`\b[A-Z]{2}\d{6,10}\b`, flags: 'g', type: 'MRN', severity: 'HIGH', token: '[MRN_PROTECTED]' },
+  { source: String.raw`\b(?:ssn|social security(?: number)?)[:\s#-]*\d{9}\b|\b\d{9}\b`, flags: 'gi', type: 'SSN', severity: 'CRITICAL', token: '[SSN_PROTECTED]' },
   {
     source: String.raw`\b\d{1,5}\s+[A-Z][A-Za-z]{1,30}(?:\s+[A-Z][A-Za-z]{1,30})?\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ln|Lane|Dr|Drive|Way|Ct|Court|Pl|Place|Ter|Terrace|Hwy|Highway|Pkwy|Parkway)\.?`,
+    flags: 'gi',
+    type: 'ADDRESS',
+    severity: 'HIGH',
+    token: '[ADDRESS_PROTECTED]',
+  },
+  {
+    source: String.raw`\b(?:rural\s+route|r\.?\s*r\.?|hc)\s+\d{1,6},?\s+box\s+\d{1,6}\b|\b(?:p\.?\s*o\.?\s+box|post\s+office\s+box)\s+\d{1,6}\b`,
     flags: 'gi',
     type: 'ADDRESS',
     severity: 'HIGH',
