@@ -41,7 +41,8 @@ interface Rule {
 // tribal ID is not swallowed by the MRN rule, and a street address is
 // replaced before a 5-digit ZIP inside it could be split off.
 // Phone runs first. It already matches 10-digit numbers and 3-3-4 groups,
-// including numbers with spaces. Grouped SSNs are the 3-2-4 shape (dashes,
+// including numbers with spaces, plus parenthetical US numbers such as
+// (405) 555-0142 and +1 (405) 555-0142. Grouped SSNs are the 3-2-4 shape (dashes,
 // spaces, or dots), so they are not phone numbers. A bare 9-digit SSN runs
 // only after phone, email, tribal ID, and MRN, so those are not relabeled.
 // A label glued to nine digits (SSN123456789) is included there. Nine bare
@@ -49,7 +50,7 @@ interface Rule {
 // TRIBAL_ID mirrors carecircle-sovereign, plus an optional leading
 // CDIB or CHK label so "CDIB CN-123-45678" does not leave the label behind.
 const RULES: Rule[] = [
-  { source: String.raw`\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b`, flags: 'g', type: 'PHONE', severity: 'HIGH', token: '[PHONE_PROTECTED]' },
+  { source: String.raw`(?:\+1[\s.-]*)?\(\d{3}\)[\s.-]*\d{3}[-.\s]?\d{4}\b|\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b`, flags: 'g', type: 'PHONE', severity: 'HIGH', token: '[PHONE_PROTECTED]' },
   { source: String.raw`\b\d{3}(?:-|\s+|\.)\d{2}(?:-|\s+|\.)\d{4}\b`, flags: 'g', type: 'SSN', severity: 'CRITICAL', token: '[SSN_PROTECTED]' },
   { source: String.raw`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`, flags: 'gi', type: 'EMAIL', severity: 'HIGH', token: '[EMAIL_PROTECTED]' },
   { source: String.raw`\b(dob|date of birth|born)[:\s]+\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b`, flags: 'gi', type: 'DOB', severity: 'CRITICAL', token: '[DOB_PROTECTED]' },

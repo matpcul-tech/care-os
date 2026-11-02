@@ -168,6 +168,34 @@ test("spaced SSN in an earlier turn blocks before the model call", async () => {
   assert.equal(stub.calls.some((c) => c.url.includes("api.anthropic.com")), false);
 });
 
+test("parenthetical phone in an earlier turn is redacted and not blocked as an SSN", async () => {
+  ready();
+  const res = await POST(
+    shieldReq({
+      messages: [
+        { role: "user", content: "Call (405) 555-0142 or (405)555-0142" },
+        { role: "assistant", content: "Also +1 (405) 555-0142" },
+        { role: "user", content: "Thanks" },
+      ],
+    }),
+  );
+  const { body } = await readJson(res);
+  assert.equal(body.shield.action, "PII_REDACTED");
+  assert.equal(body.shield.riskLevel, "HIGH");
+  assert.ok(body.shield.flags.includes("PHONE"));
+  assert.equal(body.shield.flags.includes("SSN"), false);
+  const llmCall = stub.calls.find((c) => c.url.includes("api.anthropic.com"));
+  assert.ok(llmCall, "parenthetical phone is sent after redaction");
+  const sentMessages = JSON.parse(llmCall!.body || "{}").messages;
+  assert.equal(sentMessages.length, 3);
+  const payload = JSON.stringify(sentMessages);
+  for (const leaked of ["(405) 555-0142", "(405)555-0142", "+1 (405) 555-0142", "555-0142"]) {
+    assert.equal(payload.includes(leaked), false, `model payload leaked ${leaked}`);
+  }
+  assert.match(sentMessages[0].content, /\[PHONE_PROTECTED\]/);
+  assert.match(sentMessages[1].content, /\[PHONE_PROTECTED\]/);
+});
+
 test("F6 fixed: phone in an earlier turn is redacted before the model call", async () => {
   ready();
   const res = await POST(

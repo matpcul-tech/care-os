@@ -97,6 +97,35 @@ test("SSNs with dashes, spaces, dots, or no separators are critical", () => {
   }
 });
 
+test("parenthetical US phone numbers are masked and are not SSNs", () => {
+  const phones = ["(405) 555-0142", "(405)555-0142", "+1 (405) 555-0142"];
+  for (const phone of phones) {
+    const out = redactText(`Call ${phone} about LDL 130.`);
+    assert.equal(out.critical, false, phone);
+    assert.deepEqual(out.flags, ["PHONE"], phone);
+    assert.match(out.sanitized, /\[PHONE_PROTECTED\]/);
+    assert.equal(out.sanitized.includes(phone), false, phone);
+    assert.equal(out.sanitized.includes("555-0142"), false, phone);
+    assert.equal(out.sanitized.includes("+1"), false, phone);
+    assert.match(out.sanitized, /LDL 130/);
+  }
+
+  const mixed = redactText("Call (405) 555-0142 or +1 (405)555-0142. SSN 123 45 6789.");
+  assert.equal(mixed.critical, true);
+  assert.equal(mixed.flags.includes("PHONE"), true);
+  assert.equal(mixed.flags.includes("SSN"), true);
+  assert.equal(mixed.sanitized.includes("(405)"), false);
+  assert.equal(mixed.sanitized.includes("555-0142"), false);
+  assert.equal(mixed.sanitized.includes("+1"), false);
+  assert.equal(mixed.sanitized.includes("123 45 6789"), false);
+  assert.match(mixed.sanitized, /\[PHONE_PROTECTED\]/);
+  assert.match(mixed.sanitized, /\[SSN_PROTECTED\]/);
+
+  const notPhone = redactText("Note (123) 45-6789 and LDL 130.");
+  assert.equal(notPhone.sanitized, "Note (123) 45-6789 and LDL 130.");
+  assert.deepEqual(notPhone.flags, []);
+});
+
 test("phone numbers already handled stay phones, not SSNs", () => {
   const phones = ["405-555-0142", "405.555.0142", "405 555 0142", "4055550142"];
   for (const phone of phones) {
