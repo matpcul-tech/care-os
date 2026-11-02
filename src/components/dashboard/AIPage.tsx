@@ -166,8 +166,9 @@ export default function AIPage({
             }}
           >
             Ask a care coordination question. Before a message can reach a model, the server
-            replaces known names, street addresses, ZIP codes, phone numbers, Social Security
-            numbers, dates of birth, medical record numbers, and tribal IDs with placeholders.
+            replaces known names, street addresses, rural route and post office box addresses,
+            ZIP codes, phone numbers, email addresses, Social Security numbers, dates of birth,
+            medical record numbers, and tribal IDs with placeholders.
             A Social Security number, date of birth, or tribal ID blocks the question. This is
             not full de-identification, so avoid sharing details you do not need to.
           </div>

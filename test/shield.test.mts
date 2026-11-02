@@ -95,6 +95,107 @@ test("clean text passes through and is marked CLEAN_PASS", async () => {
   assert.equal(body.shield.flags.length, 0);
 });
 
+test("every chat turn is redacted before the model call", async () => {
+  ready();
+  const res = await POST(
+    shieldReq({
+      messages: [
+        { role: "user", content: "Write me at ada.lovelace@example.com about Rural Route 2 Box 15" },
+        { role: "assistant", content: "The other box is PO Box 123 and phone 405-555-0199" },
+        { role: "user", content: "Also RR 2 Box 15, HC 1 Box 30, and P.O. Box 44. Post Office Box 7 too." },
+      ],
+    }),
+  );
+  const { body } = await readJson(res);
+  assert.equal(body.shield.action, "PII_REDACTED");
+  assert.notEqual(body.shield.action, "BLOCKED");
+  const llmCall = stub.calls.find((c) => c.url.includes("api.anthropic.com"));
+  assert.ok(llmCall, "non-critical turns are still sent after redaction");
+  const sentMessages = JSON.parse(llmCall!.body || "{}").messages;
+  assert.equal(sentMessages.length, 3);
+  const payload = JSON.stringify(sentMessages);
+  for (const leaked of [
+    "ada.lovelace@example.com",
+    "Rural Route 2 Box 15",
+    "PO Box 123",
+    "405-555-0199",
+    "RR 2 Box 15",
+    "HC 1 Box 30",
+    "P.O. Box 44",
+    "Post Office Box 7",
+  ]) {
+    assert.equal(payload.includes(leaked), false, `model payload leaked ${leaked}`);
+  }
+  assert.match(sentMessages[0].content, /\[EMAIL_PROTECTED\]/);
+  assert.match(sentMessages[0].content, /\[ADDRESS_PROTECTED\]/);
+  assert.match(sentMessages[1].content, /\[ADDRESS_PROTECTED\]/);
+  assert.match(sentMessages[1].content, /\[PHONE_PROTECTED\]/);
+  assert.match(sentMessages[2].content, /\[ADDRESS_PROTECTED\]/);
+});
+
+test("undashed SSN in an earlier turn blocks before the model call", async () => {
+  ready();
+  const res = await POST(
+    shieldReq({
+      messages: [
+        { role: "user", content: "Her number is 123456789" },
+        { role: "assistant", content: "Noted." },
+        { role: "user", content: "Thanks" },
+      ],
+    }),
+  );
+  const { body } = await readJson(res);
+  assert.equal(body.shield.action, "BLOCKED");
+  assert.equal(body.shield.riskLevel, "CRITICAL");
+  assert.ok(body.shield.flags.includes("SSN"));
+  assert.equal(stub.calls.some((c) => c.url.includes("api.anthropic.com")), false);
+});
+
+test("spaced SSN in an earlier turn blocks before the model call", async () => {
+  ready();
+  const res = await POST(
+    shieldReq({
+      messages: [
+        { role: "user", content: "Noted the visit" },
+        { role: "assistant", content: "The form listed 123 45 6789" },
+        { role: "user", content: "Thanks" },
+      ],
+    }),
+  );
+  const { body } = await readJson(res);
+  assert.equal(body.shield.action, "BLOCKED");
+  assert.ok(body.shield.flags.includes("SSN"));
+  assert.equal(stub.calls.some((c) => c.url.includes("api.anthropic.com")), false);
+});
+
+test("parenthetical phone in an earlier turn is redacted and not blocked as an SSN", async () => {
+  ready();
+  const res = await POST(
+    shieldReq({
+      messages: [
+        { role: "user", content: "Call (405) 555-0142 or (405)555-0142" },
+        { role: "assistant", content: "Also +1 (405) 555-0142" },
+        { role: "user", content: "Thanks" },
+      ],
+    }),
+  );
+  const { body } = await readJson(res);
+  assert.equal(body.shield.action, "PII_REDACTED");
+  assert.equal(body.shield.riskLevel, "HIGH");
+  assert.ok(body.shield.flags.includes("PHONE"));
+  assert.equal(body.shield.flags.includes("SSN"), false);
+  const llmCall = stub.calls.find((c) => c.url.includes("api.anthropic.com"));
+  assert.ok(llmCall, "parenthetical phone is sent after redaction");
+  const sentMessages = JSON.parse(llmCall!.body || "{}").messages;
+  assert.equal(sentMessages.length, 3);
+  const payload = JSON.stringify(sentMessages);
+  for (const leaked of ["(405) 555-0142", "(405)555-0142", "+1 (405) 555-0142", "555-0142"]) {
+    assert.equal(payload.includes(leaked), false, `model payload leaked ${leaked}`);
+  }
+  assert.match(sentMessages[0].content, /\[PHONE_PROTECTED\]/);
+  assert.match(sentMessages[1].content, /\[PHONE_PROTECTED\]/);
+});
+
 test("F6 fixed: phone in an earlier turn is redacted before the model call", async () => {
   ready();
   const res = await POST(
