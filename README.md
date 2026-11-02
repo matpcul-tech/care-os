@@ -1,6 +1,6 @@
-# CareCircle — Family Care Coordination
+# CareCircle: Family Care Coordination
 
-A "Care OS" for families coordinating care for aging parents. Shared dashboard for medications, appointments, care tasks, insurance documents, emergency contacts, and an AI care assistant.
+A care coordination app for families. Shared medications, appointments, care tasks, a document vault, and an AI assistant. CareCircle is the family companion to CareIQ for community health centers.
 
 ## Quick Start
 
@@ -13,17 +13,17 @@ Open [http://localhost:3000](http://localhost:3000)
 
 Copy `.env.example` to `.env.local` and fill in the values. Providers for AI,
 email, and SMS are swappable by env (`LLM_PROVIDER`, `EMAIL_PROVIDER`,
-`SMS_PROVIDER`) — including a self-hosted local model via `LLM_PROVIDER=openai`.
+`SMS_PROVIDER`), including a self-hosted local model via `LLM_PROVIDER=openai`.
 
 ## Self-hosting the data layer
 
 To run Supabase (Postgres / auth / storage) yourself instead of the managed
-cloud, see [`self-host/`](./self-host/README.md) — a Docker Compose stack that
+cloud, see [`self-host/`](./self-host/README.md), a Docker Compose stack that
 serves the identical API surface so the app's migrations and RLS run
 unchanged. Point `NEXT_PUBLIC_SUPABASE_URL` at your gateway.
 
 The app also ships a `Dockerfile` (standalone Next.js output). Run it
-alongside the self-hosted stack — one host, one network, one BAA — with the
+alongside the self-hosted stack (one host, one network, one BAA) with the
 app overlay:
 
 ```bash
@@ -45,58 +45,45 @@ vercel
 ## Project Structure
 
 ```
-carecircle/
-├── public/
-│   ├── favicon.svg          # App icon
-│   └── manifest.json        # PWA manifest
-├── src/
-│   ├── main.jsx             # Entry point + router
-│   ├── index.css             # Global styles
-│   ├── LandingPage.jsx       # Marketing / conversion page (/)
-│   ├── App.jsx               # Main app shell (/app)
-│   ├── App.css               # App styles
-│   ├── data.js               # Demo data constants
-│   ├── storage.js            # localStorage persistence layer
-│   └── notifications.js      # Browser notification + reminder system
-├── index.html
-├── vite.config.js
-├── vercel.json               # SPA rewrite rules
-└── package.json
+src/app/                  Next.js routes (landing, login, dashboard, API)
+src/components/           Family monitor and dashboard screens
+src/lib/                  Auth, audit, vault crypto, model provider
+supabase/migrations/      Postgres schema and row level security
+self-host/                Optional self-hosted Supabase stack
+test/                     Node test suite
 ```
 
 ## Routes
 
-| Path    | Component      | Description                    |
-|---------|---------------|--------------------------------|
-| `/`     | LandingPage   | Marketing page with pricing    |
-| `/app`  | App           | Full care coordination app     |
+| Path         | Description                                      |
+|--------------|--------------------------------------------------|
+| `/`          | Marketing page                                   |
+| `/login`     | Family member sign in                            |
+| `/app`       | Family page                                      |
+| `/dashboard` | Family monitor (readings, tasks, chat, vault)   |
 
-## Features
+## Features in this repo
 
-- **Medication Tracker** — Visual daily schedule, one-tap logging, refill alerts
-- **Shared Care Calendar** — Appointments with prep notes and post-visit summaries
-- **Task Management** — Assign care duties by family member with priority levels
-- **Document Vault** — Encrypted storage for insurance, legal, and medical docs
-- **AI Care Assistant** — Visit summaries, family updates, proactive alerts
-- **Emergency Profile** — One-tap access for first responders and ER staff
-- **Persistent Storage** — All data saved to localStorage across sessions
-- **Push Notifications** — Browser-native medication reminders and care alerts
-- **PWA Ready** — Installable as a mobile app via manifest.json
+- Shared medications, with a taken log
+- Shared appointments and care tasks
+- Document vault encrypted at rest with AES-256-GCM (server key)
+- Care circle invites. Only the patient or an admin can add members
+- AI chat that redacts common identifiers and blocks Social Security numbers, dates of birth, and tribal IDs before a model call
+- Optional SMS and email alerts when those providers are configured
+
+Not in this repo: on-device encryption, community-held keys, an electronic health record connection, remote patient monitoring time tracking, billing, or browser push notifications.
 
 ## Tech Stack
 
-- React 18 + Vite
-- React Router v6
+- Next.js 14 and React 18
+- Supabase (auth, Postgres, storage)
 - Lucide React icons
-- localStorage persistence
-- Browser Notification API
+- Model calls through `src/lib/providers/llm.ts` (Anthropic by default, or an OpenAI-compatible endpoint)
 - Deployed via Vercel
 
-## Monetization (Planned)
+## Pricing
 
-- Free tier: 1 care recipient, 2 family members
-- Family ($9/mo): AI summaries, 8 members, 25GB vault
-- Family+ ($19/mo): Unlimited, scanning, provider portal
+The marketing page says CareCircle is free for families. There is no billing code in this repo. Paid tiers are not implemented.
 
 ## License
 

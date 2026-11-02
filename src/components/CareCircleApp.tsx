@@ -21,7 +21,9 @@ import { loadSession, ensureValidSession, type CCSession } from '@/lib/cc-data';
  *   - Medications + medication_logs: Supabase REST direct with the
  *     family member's JWT; RLS via is_patient_or_member.
  *   - Appointments + care_circle: same.
- *   - AI chat: posts to {CAREIQ_URL}/api/shield with the JWT.
+ *   - AI chat: posts to this app's /api/shield with the JWT. That route
+ *     redacts identifiers and blocks CRITICAL questions before any
+ *     model call. It does not attach the readings shown on this screen.
  *
  * Single-file by design (per shipping constraint). All inline.
  */
@@ -500,9 +502,9 @@ function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
             </svg>
           </div>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: INK }}>Live Wearable</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: INK }}>Shared readings</div>
             <div style={{ fontFamily: T, fontSize: 9, color: MUTED, marginTop: 1 }}>
-              Withings ScanWatch · Syncing every 5s
+              From CareIQ. Refreshes about every 5 seconds. Not a device link.
             </div>
           </div>
         </div>
@@ -533,7 +535,16 @@ function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
               animation: 'pulse 1.5s infinite',
             }}
           />
-          LIVE
+          {shield?.hr != null ||
+          shield?.spo2 != null ||
+          shield?.bp_systolic != null ||
+          shield?.fasting_glucose != null ||
+          shield?.hrv != null ||
+          shield?.steps != null ||
+          shield?.sleep_hours != null ||
+          tempEntry?.value != null
+            ? 'From CareIQ'
+            : 'No readings'}
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
@@ -546,10 +557,10 @@ function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
 }
 
 // =========================================================================
-// ZKShieldBanner
+// ShieldBanner
 // =========================================================================
 
-function ZKShieldBanner() {
+function ShieldBanner() {
   return (
     <div
       style={{
@@ -580,7 +591,7 @@ function ZKShieldBanner() {
       </svg>
       <div style={{ fontSize: 11, lineHeight: 1.55, color: SUB }}>
         <span style={{ color: OK, fontWeight: 700 }}>Shield Active.</span>{' '}
-        AES-256-GCM encryption at rest, role-scoped access, audit logging, and identifier redaction on AI prompts.
+        Server-side AES-256-GCM at rest, HIPAA-aligned architecture, role-scoped access, and identifier redaction before a model call. The encryption key is held by the operator, not on this device.
       </div>
     </div>
   );
@@ -1490,12 +1501,10 @@ function FamilyView({ session, router }: { session: CCSession; router: ReturnTyp
 interface ChatTurn { role: 'user' | 'ai'; text: string }
 
 const SUGGESTED = [
-  'What do her live vitals mean?',
-  'Is her heart rate normal right now?',
-  'Explain her HRV reading',
-  'How is her SpO2 trend?',
-  'What should the family watch for?',
-  'How close is she to her A1C target?',
+  'What should the family watch for this week?',
+  'Help us plan around a high blood pressure alert',
+  'What questions should we ask at the next visit?',
+  'How do we split medication check-ins across the family?',
 ];
 
 function AIView({ session, router }: { session: CCSession; router: ReturnType<typeof useRouter> }) {
@@ -1517,23 +1526,31 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
     try {
       const valid = await ensureValidSession(session);
       if (!valid) { router.push('/login'); return; }
-      const r = await fetch(`${CAREIQ_URL}/api/shield`, {
+      const history = [...msgs, { role: 'user' as const, text: t }];
+      const r = await fetch('/api/shield', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${valid.access_token}`,
         },
-        body: JSON.stringify({ prompt: t }),
+        body: JSON.stringify({
+          messages: history.map((m) => ({
+            role: m.role === 'ai' ? 'assistant' : 'user',
+            content: m.text,
+          })),
+          patientId: valid.patient_id,
+        }),
       });
       const d = await r.json().catch(() => ({}));
-      const blocked = Boolean(d?.meta?.blocked);
       let aiText: string;
-      if (blocked) {
-        aiText = 'Blocked: PII detected. Re-send your question without personally identifying information.';
-      } else if (typeof d.insight === 'string' && d.insight.length > 0) {
-        aiText = d.insight;
+      if (typeof d.content === 'string' && d.content.length > 0) {
+        aiText = d.content;
+      } else if (typeof d.error === 'string' && d.error.length > 0) {
+        aiText = d.error;
+      } else if (!r.ok) {
+        aiText = 'CareCircle AI is unavailable right now. Your message was not sent. Try again in a moment.';
       } else {
-        aiText = 'CareCircle Health OS is unavailable right now. Try again in a moment.';
+        aiText = 'CareCircle AI did not return an answer. Try again in a moment.';
       }
       setMsgs((p) => [...p, { role: 'ai', text: aiText }]);
     } catch {
@@ -1579,37 +1596,7 @@ function AIView({ session, router }: { session: CCSession; router: ReturnType<ty
               CareCircle Health OS
             </div>
             <div style={{ fontSize: 11, color: SUB, lineHeight: 1.5 }}>
-              AI grounded in your loved one's live wearable data and clinical
-              panel. Every answer cites her real numbers.
-            </div>
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                padding: '3px 9px',
-                borderRadius: 12,
-                background: 'rgba(74,222,128,0.12)',
-                border: '1px solid rgba(74,222,128,0.3)',
-                fontFamily: T,
-                fontSize: 9,
-                color: OK,
-                marginTop: 8,
-                fontWeight: 700,
-                textTransform: 'uppercase',
-                letterSpacing: '.12em',
-              }}
-            >
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: OK,
-                  animation: 'pulse 1.5s infinite',
-                }}
-              />
-              Live Wearable Connected
+              Ask a care coordination question. When a model is configured, the server redacts common identifiers first and blocks Social Security numbers, dates of birth, and tribal IDs. This chat does not receive the readings on this screen.
             </div>
           </div>
         </div>
@@ -1748,9 +1735,7 @@ function AlertsView({ shield, shieldLoading }: { shield: ShieldPayload | null; s
         <div style={{ fontFamily: P, fontSize: 14, color: INK, marginBottom: 4 }}>
           24-hour health watch
         </div>
-        Alerts trigger automatically when wearable readings cross safe
-        thresholds. Phone notifications are coming soon; for now keep
-        this tab open to see them in real time.
+        These notes are calculated in the app from readings CareIQ returns. They are not a remote patient monitoring service, and they do not contact a clinic. Keep this tab open to refresh them.
       </div>
 
       {shieldLoading && alerts.length === 0 && (
@@ -2107,7 +2092,7 @@ export default function CareCircleApp() {
         <div className="sov-scroll">
           <div className="sov-pad">
             <LiveWearableStrip shield={shield} />
-            <ZKShieldBanner />
+            <ShieldBanner />
             {renderTab()}
             <div style={{ padding: '12px 0 0' }}>
               <button

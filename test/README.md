@@ -149,16 +149,17 @@ Two follow-ups after the role/audit work. Suite is now **103/103 passing**,
 
 The "Sovereign Prompt Shield" was described across the app as de-identifying
 PHI ("PHI has been replaced with protected tokens", "never reaches a
-commercial server in readable form", "ZK Shield", "HIPAA-compliant
-infrastructure"). In reality it regex-redacts five identifier patterns (SSN,
-phone, DOB, MRN, dates) and still sends everything else — names, clinical
-details — to a third-party model. All user-facing and system-prompt copy was
-rewritten to state what it actually does: server-side redaction of common
-direct identifiers, *not* full de-identification, with data sent to an
-external provider over TLS. Touched: shield system prompt + `action` label
-(`PII_BLOCKED` → `PII_REDACTED`, `shieldVersion` de-`ZK`'d), landing page,
-ShieldPage, AIPage, signup, alert/invite email + SMS footers, and the
-CareCircleApp banner.
+commercial server in readable form", "ZK Shield", and a prohibited HIPAA
+compliance phrase). The shield now does deterministic replacement of known
+patient and circle names, title-style names, street addresses, ZIP codes,
+phone numbers, Social Security numbers, dates of birth, medical record
+numbers, tribal IDs, and dates. Questions that include a Social Security
+number, date of birth, or tribal ID are blocked and are not sent. Everything
+else, including clinical details, can still go to a third-party model.
+User-facing copy says that, and it uses "HIPAA-aligned architecture" rather
+than a compliance certification. A test fails if the prohibited phrase
+returns. Touched: shield system prompt, landing page, ShieldPage, AIPage,
+and the CareCircleApp banner.
 
 ### Rate limiting
 

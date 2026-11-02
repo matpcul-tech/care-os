@@ -35,10 +35,13 @@ export default function ShieldPage({ logs }: { logs: ShieldLog[] }) {
           </span>
         </div>
         <div style={{ fontSize: 11, color: '#7a9bbf', lineHeight: 1.65 }}>
-          Before an AI query reaches the external model, the server redacts common identifier
-          patterns — Social Security numbers, phone numbers, dates of birth, medical record numbers,
-          and dates. This reduces exposure but is not full de-identification: names and clinical
-          details may remain. A risk score and action are returned alongside each response.
+          Before an AI query can reach an external model, the server replaces known patient and
+          circle names, title-style names, street addresses, ZIP codes, phone numbers, Social
+          Security numbers, dates of birth, medical record numbers, tribal IDs, and dates with
+          placeholders. A question that includes a Social Security number, date of birth, or tribal
+          ID is blocked and is not sent. This is not full de-identification: other names and
+          clinical details may remain. Stored files are encrypted on the server. The key is held
+          by the operator, not on this device.
         </div>
       </div>
 

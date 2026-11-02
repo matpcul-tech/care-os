@@ -103,6 +103,65 @@ test("SECURITY (F3 fixed): POST by a non-member is rejected 403", async () => {
   assert.equal(status, 403);
 });
 
+test("SECURITY: a caregiver cannot add a circle member", async () => {
+  stub.reset();
+  stub.on("/auth/v1/user", () => ({ json: { id: "caregiver-1" } }));
+  stub.on("/rest/v1/care_circle", (c) => {
+    if (c.url.includes("member_user_id") && c.url.includes("care_role=eq.admin")) return { json: [] };
+    if (c.url.includes("member_user_id")) return { json: [{ id: "cc-cg", care_role: "caregiver" }] };
+    if (c.method === "POST") return { json: [{ id: "should-not-insert" }] };
+    return undefined;
+  });
+  stub.on("api.resend.com", () => ({ json: { id: "e" } }));
+  const res = await POST(
+    makeReq("https://care/api/circle", {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({
+        patient_id: "patient-1",
+        member_email: "new@x.com",
+        member_name: "New Person",
+        relationship: "Cousin",
+        alert_level: "informational",
+      }),
+    }),
+  );
+  const { status, body } = await readJson(res);
+  assert.equal(status, 403);
+  assert.match(body.error, /admin/);
+  assert.equal(stub.calls.some((c) => c.method === "POST" && c.url.includes("/rest/v1/care_circle")), false);
+  assert.equal(stub.calls.some((c) => c.url.includes("api.resend.com")), false);
+});
+
+test("an admin who is not the patient can add a circle member", async () => {
+  stub.reset();
+  stub.on("/auth/v1/user", () => ({ json: { id: "admin-1" } }));
+  stub.on("/rest/v1/care_circle", (c) => {
+    if (c.url.includes("care_role=eq.admin") && c.url.includes("member_user_id")) {
+      return { json: [{ id: "cc-admin" }] };
+    }
+    if (c.method === "POST") return { json: [{ id: "new", ...JSON.parse(c.body || "[]")[0] }] };
+    return undefined;
+  });
+  stub.on("api.resend.com", () => ({ json: { id: "email_admin" } }));
+  const res = await POST(
+    makeReq("https://care/api/circle", {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({
+        patient_id: "patient-1",
+        member_email: "sis@x.com",
+        member_name: "Sis",
+        relationship: "Daughter",
+        alert_level: "critical",
+      }),
+    }),
+  );
+  const { status, body } = await readJson(res);
+  assert.equal(status, 200);
+  assert.equal(body.member.member_email, "sis@x.com");
+});
+
 test("authorized POST adds a member and sends the invite email", async () => {
   stub.reset();
   stub.on("/auth/v1/user", () => ({ json: { id: "patient-1" } })); // patient adds to own circle

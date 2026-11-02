@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { bearerToken, getUserId, isPatientOrMember } from '@/lib/api-auth';
+import { bearerToken, getUserId, isPatientOrAdmin, isPatientOrMember } from '@/lib/api-auth';
 import { checkRateLimit, clientIp } from '@/lib/rate-limit';
 import { sendEmail } from '@/lib/providers/email';
 
@@ -11,8 +11,10 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 /**
- * Resolve the caller and confirm they may operate on `patientId`. Returns an
+ * Resolve the caller and confirm they may read `patientId`. Returns an
  * error NextResponse to short-circuit with, or null when authorized.
+ * Any circle member may read. Adding a member is stricter: see
+ * authorizeToGrant.
  */
 async function authorizeForPatient(
   req: NextRequest,
@@ -22,6 +24,22 @@ async function authorizeForPatient(
   if (!userId) return bad('authentication required', 401);
   if (!(await isPatientOrMember(userId, patientId))) {
     return bad('forbidden', 403);
+  }
+  return null;
+}
+
+/**
+ * Only the patient, or a member whose care_role is admin, may add
+ * circle members or otherwise grant access.
+ */
+async function authorizeToGrant(
+  req: NextRequest,
+  patientId: string,
+): Promise<NextResponse | null> {
+  const userId = await getUserId(bearerToken(req));
+  if (!userId) return bad('authentication required', 401);
+  if (!(await isPatientOrAdmin(userId, patientId))) {
+    return bad('only the patient or an admin can add circle members', 403);
   }
   return null;
 }
@@ -155,7 +173,7 @@ export async function POST(req: NextRequest) {
       return bad('care_role must be "admin", "caregiver", or "viewer"');
     }
 
-    const denied = await authorizeForPatient(req, patientId);
+    const denied = await authorizeToGrant(req, patientId);
     if (denied) return denied;
 
     const insertRes = await sb(

@@ -7,8 +7,8 @@ the identical API surface (`/auth/v1`, `/rest/v1`, `/storage/v1`). Your
 existing `supabase/migrations` and RLS policies run **unchanged**; the app
 only needs `NEXT_PUBLIC_SUPABASE_URL` pointed here.
 
-> ⚠️ **This gets you a working, correct stack - not an automatically
-> HIPAA-compliant one.** Self-hosting *moves* the safeguards onto you: TLS,
+> **This gets you a working stack. Self-hosting does not by itself produce a
+> HIPAA-aligned architecture.** Self-hosting moves the safeguards onto you: TLS,
 > disk encryption, backups, patching, and key management are now your job.
 > Work through the **Hardening** checklist below before any real PHI, and get
 > a BAA with whoever hosts the servers (AWS/GCP/colo).
