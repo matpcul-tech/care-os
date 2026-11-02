@@ -48,13 +48,18 @@ export default function AIPage({
           },
           body: JSON.stringify({ messages: newMsgs, patientId: session.patient_id }),
         });
-        if (!res.ok) throw new Error('shield error');
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
+        const reply =
+          (typeof data.content === 'string' && data.content) ||
+          (typeof data.error === 'string' && data.error) ||
+          (res.ok
+            ? 'Unable to connect to the Shield right now.'
+            : 'CareCircle AI is unavailable right now. Your message was not sent.');
         setMsgs([
           ...newMsgs,
           {
             role: 'assistant',
-            content: data.content || 'Unable to connect to the Shield right now.',
+            content: reply,
           },
         ]);
         addLog({
@@ -160,10 +165,11 @@ export default function AIPage({
               lineHeight: 1.6,
             }}
           >
-            Ask anything about the alerts you have received. Before each message reaches the AI
-            model, the server redacts common identifiers (Social Security numbers, phone numbers,
-            dates of birth). This isn&apos;t full de-identification, so avoid sharing details you
-            don&apos;t need to.
+            Ask a care coordination question. Before a message can reach a model, the server
+            replaces known names, street addresses, ZIP codes, phone numbers, Social Security
+            numbers, dates of birth, medical record numbers, and tribal IDs with placeholders.
+            A Social Security number, date of birth, or tribal ID blocks the question. This is
+            not full de-identification, so avoid sharing details you do not need to.
           </div>
         )}
         {msgs.map((m, i) => (

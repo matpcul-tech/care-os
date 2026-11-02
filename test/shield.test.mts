@@ -58,14 +58,33 @@ test("rate limit: over-limit user gets 429 and never reaches the model", async (
   assert.equal(stub.calls.some((c) => c.url.includes("api.anthropic.com")), false);
 });
 
-test("SSN is redacted before reaching the model", async () => {
+test("SSN is CRITICAL and blocked: no model call", async () => {
   ready();
   const res = await POST(shieldReq({ messages: [{ role: "user", content: "My SSN is 123-45-6789" }], patientId: "p1" }));
-  const { body } = await readJson(res);
-  assert.match(body.content, /\[SSN_PROTECTED\]/);
-  assert.doesNotMatch(body.content, /123-45-6789/);
-  assert.equal(body.shield.action, "PII_REDACTED");
+  const { status, body } = await readJson(res);
+  assert.equal(status, 200);
+  assert.equal(body.shield.action, "BLOCKED");
+  assert.equal(body.shield.riskLevel, "CRITICAL");
   assert.ok(body.shield.flags.includes("SSN"));
+  assert.match(body.content, /Social Security number/);
+  assert.doesNotMatch(body.content, /123-45-6789/);
+  assert.equal(stub.calls.some((c) => c.url.includes("api.anthropic.com")), false);
+});
+
+test("phone-only (HIGH) is redacted and still sent", async () => {
+  ready();
+  const res = await POST(shieldReq({ messages: [{ role: "user", content: "Call me at 405-555-0142 about the refill" }], patientId: "p1" }));
+  const { body } = await readJson(res);
+  assert.equal(body.shield.action, "PII_REDACTED");
+  assert.equal(body.shield.riskLevel, "HIGH");
+  assert.ok(body.shield.flags.includes("PHONE"));
+  const llmCall = stub.calls.find((c) => c.url.includes("api.anthropic.com"));
+  assert.ok(llmCall, "HIGH phone prompt is sent after redaction");
+  const sent = JSON.parse(llmCall!.body || "{}");
+  const payload = JSON.stringify(sent.messages);
+  assert.match(payload, /\[PHONE_PROTECTED\]/);
+  assert.doesNotMatch(payload, /405-555-0142/);
+  assert.match(payload, /refill/);
 });
 
 test("clean text passes through and is marked CLEAN_PASS", async () => {
@@ -76,12 +95,12 @@ test("clean text passes through and is marked CLEAN_PASS", async () => {
   assert.equal(body.shield.flags.length, 0);
 });
 
-test("F6 fixed: PII in earlier (non-last) messages IS sanitized", async () => {
+test("F6 fixed: phone in an earlier turn is redacted before the model call", async () => {
   ready();
   const res = await POST(
     shieldReq({
       messages: [
-        { role: "user", content: "Her SSN is 987-65-4321" }, // earlier turn
+        { role: "user", content: "Her phone is 405-555-0199" },
         { role: "assistant", content: "Noted." },
         { role: "user", content: "Thanks" },
       ],
@@ -91,8 +110,24 @@ test("F6 fixed: PII in earlier (non-last) messages IS sanitized", async () => {
   const llmCall = stub.calls.find((c) => c.url.includes("api.anthropic.com"))!;
   const sentMessages = JSON.parse(llmCall.body || "{}").messages;
   const firstContent = sentMessages[0].content;
-  assert.doesNotMatch(firstContent, /987-65-4321/, "SSN in a prior turn must be redacted");
-  assert.match(firstContent, /\[SSN_PROTECTED\]/);
+  assert.doesNotMatch(firstContent, /405-555-0199/, "phone in a prior turn must be redacted");
+  assert.match(firstContent, /\[PHONE_PROTECTED\]/);
+});
+
+test("SSN in an earlier turn blocks the whole request", async () => {
+  ready();
+  const res = await POST(
+    shieldReq({
+      messages: [
+        { role: "user", content: "Her SSN is 987-65-4321" },
+        { role: "assistant", content: "Noted." },
+        { role: "user", content: "Thanks" },
+      ],
+    }),
+  );
+  const { body } = await readJson(res);
+  assert.equal(body.shield.action, "BLOCKED");
+  assert.equal(stub.calls.some((c) => c.url.includes("api.anthropic.com")), false);
 });
 
 test("empty/missing messages array returns 400 (not a crash)", async () => {
@@ -134,6 +169,85 @@ test("AI query with no patientId is not patient-scoped-audited (table requires p
   const res = await POST(shieldReq({ messages: [{ role: "user", content: "hi" }] }));
   await readJson(res);
   assert.equal(auditRows().length, 0);
+});
+
+test("known names, address, ZIP, phone, and MRN never reach the model payload", async () => {
+  ready();
+  stub.on("/rest/v1/care_circle", () => ({
+    json: [{ patient_name: "Jane Doe", member_name: "Rosa Martinez", patient_nickname: "Grandma" }],
+  }));
+  const res = await POST(
+    shieldReq({
+      patientId: "patient-1",
+      messages: [
+        {
+          role: "user",
+          content:
+            "Jane Doe (Grandma) lives at 123 Main Street, Ada OK 74820. Rosa Martinez called from 405-555-0142 about MRN AB1234567. Her A1C of 8.2 is high.",
+        },
+      ],
+    }),
+  );
+  const { status, body } = await readJson(res);
+  assert.equal(status, 200);
+  assert.equal(body.shield.action, "PII_REDACTED");
+  assert.notEqual(body.shield.action, "BLOCKED");
+  const llmCall = stub.calls.find((c) => c.url.includes("api.anthropic.com"));
+  assert.ok(llmCall);
+  const payload = llmCall!.body || "";
+  for (const leaked of [
+    "Jane Doe",
+    "Jane",
+    "Doe",
+    "Grandma",
+    "Rosa Martinez",
+    "Rosa",
+    "Martinez",
+    "123 Main Street",
+    "74820",
+    "405-555-0142",
+    "AB1234567",
+  ]) {
+    assert.equal(payload.includes(leaked), false, `payload leaked ${leaked}`);
+  }
+  assert.match(payload, /\[PATIENT_NAME\]/);
+  assert.match(payload, /\[MEMBER_NAME\]/);
+  assert.match(payload, /\[ADDRESS_PROTECTED\]/);
+  assert.match(payload, /\[ZIP_PROTECTED\]/);
+  assert.match(payload, /\[PHONE_PROTECTED\]/);
+  assert.match(payload, /\[MRN_PROTECTED\]/);
+  assert.match(payload, /A1C of 8\.2/);
+});
+
+test("full synthetic PHI prompt is blocked and makes no model call", async () => {
+  ready();
+  stub.on("/rest/v1/care_circle", () => ({
+    json: [{ patient_name: "Jane Doe", member_name: "Rosa Martinez", patient_nickname: null }],
+  }));
+  const res = await POST(
+    shieldReq({
+      patientId: "patient-1",
+      messages: [
+        {
+          role: "user",
+          content:
+            "Patient Jane Doe, DOB: 03/14/1961, MRN AB1234567, SSN 123-45-6789, phone 405-555-0142, lives at 123 Main Street, Ada OK 74820. Mrs. Jane Doe has CDIB CN-123-45678. What should we do about her A1C of 8.2?",
+        },
+      ],
+    }),
+  );
+  const { status, body } = await readJson(res);
+  assert.equal(status, 200);
+  assert.equal(body.shield.action, "BLOCKED");
+  assert.equal(body.shield.riskLevel, "CRITICAL");
+  for (const flag of ["SSN", "DOB", "TRIBAL_ID"]) {
+    assert.ok(body.shield.flags.includes(flag), flag);
+  }
+  assert.equal(stub.calls.some((c) => c.url.includes("api.anthropic.com")), false);
+  const audit = JSON.stringify(auditRows());
+  assert.doesNotMatch(audit, /123-45-6789/);
+  assert.doesNotMatch(audit, /Jane Doe/);
+  assert.doesNotMatch(audit, /CN-123-45678/);
 });
 
 test("message content is truncated to the 8000-char cap before the LLM call", async () => {

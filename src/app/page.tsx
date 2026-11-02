@@ -3,26 +3,26 @@ import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import {
   Heart, Calendar, Users, FileText, Pill,
-  Star, ArrowRight, AlertTriangle, Bot, Shield, Phone,
+  ArrowRight, AlertTriangle, Bot, Shield, Phone,
 } from 'lucide-react';
 
 const T = "'DM Mono',monospace";
 const O = "'Outfit',sans-serif";
 const P = "'Playfair Display',serif";
 
-const TESTIMONIALS = [
-  { name: 'Rachel M.', role: 'Caring for her father', text: "I was drowning in group texts and sticky notes. CareCircle gave our family one place to coordinate everything. Dad's care has never been this organized.", stars: 5 },
-  { name: 'David K.', role: 'Long-distance caregiver', text: 'Living 800 miles from Mom, I always felt out of the loop. Now I see every appointment, every med change, every update in real time.', stars: 5 },
-  { name: 'Maria S.', role: 'Coordinating for both parents', text: "The AI summaries after doctor visits are a game-changer. I just share them with my brothers and everyone is on the same page instantly.", stars: 5 },
+const FACTS = [
+  { title: 'Shared family record', text: 'Medications, appointments, and tasks live in one place the circle can update together.' },
+  { title: 'Documents at rest', text: 'Uploaded files are encrypted with AES-256-GCM on the server. The operator holds the key. The app does not encrypt data on the phone.' },
+  { title: 'AI with a shield', text: 'Chat replaces common identifiers with placeholders and blocks Social Security numbers, dates of birth, and tribal IDs before a model call. It does not write visit summaries on its own, and it does not connect to an electronic health record.' },
 ];
 
 const FEATURES = [
-  { icon: Pill, title: 'Medication Tracker', desc: 'Visual daily schedule with refill alerts, dosage history, and one-tap logging for the whole family to see.', color: '#00d4b8' },
-  { icon: Calendar, title: 'Shared Care Calendar', desc: 'Every appointment, lab, and therapy session in one place. Prep notes, directions, and post-visit summaries attached.', color: '#8060cc' },
-  { icon: Users, title: 'Family Coordination', desc: 'Divide care duties fairly. Assign tasks by family member with priority levels, due dates, and completion tracking.', color: '#4ade80' },
-  { icon: FileText, title: 'Secure Document Vault', desc: 'Insurance cards, legal docs, lab results, and care plans — organized and accessible when you need them most.', color: '#d4a843' },
-  { icon: Bot, title: 'AI Care Assistant', desc: 'Turn doctor visit notes into clear next steps. Draft family updates. Get proactive alerts about refills and follow-ups.', color: '#00d4b8' },
-  { icon: AlertTriangle, title: 'Emergency Profile', desc: 'One-tap access to conditions, medications, allergies, and emergency contacts — ready for first responders and ER staff.', color: '#e8526e' },
+  { icon: Pill, title: 'Medication Tracker', desc: 'A shared medication list with dose, schedule, and a taken log the family can see.', color: '#00d4b8' },
+  { icon: Calendar, title: 'Shared Care Calendar', desc: 'Appointments in one calendar, with location and notes the family can add.', color: '#8060cc' },
+  { icon: Users, title: 'Family Coordination', desc: 'Assign care tasks by family member, with priority, due dates, and completion tracking.', color: '#4ade80' },
+  { icon: FileText, title: 'Secure Document Vault', desc: 'Upload insurance cards, legal docs, and care files. Files are encrypted at rest on the server.', color: '#d4a843' },
+  { icon: Bot, title: 'AI Care Assistant', desc: 'Ask care coordination questions. The server redacts common identifiers and blocks Social Security numbers, dates of birth, and tribal IDs before a model call.', color: '#00d4b8' },
+  { icon: AlertTriangle, title: 'Care contacts', desc: 'Circle members and alert preferences are listed for the family. Conditions, allergies, and blood type are not shown on the emergency screen yet.', color: '#e8526e' },
 ];
 
 function useInView(threshold = 0.12) {
@@ -198,7 +198,7 @@ export default function LandingPage() {
           <FadeIn>
             <div style={{ fontFamily:T, fontSize:10, color:'#00d4b8', textTransform:'uppercase', letterSpacing:3, marginBottom:12 }}>Features</div>
             <h2 style={{ fontFamily:P, fontSize:'clamp(26px,4vw,42px)', fontWeight:300, lineHeight:1.2, marginBottom:16, color:'#eef2f8' }}>Everything your family needs<br/>in one place</h2>
-            <p style={{ fontSize:16, lineHeight:1.75, color:'#7a9bbf', maxWidth:540, marginBottom:48 }}>Built for real family caregivers — people working full time jobs, raising kids, and still showing up for their parents.</p>
+            <p style={{ fontSize:16, lineHeight:1.75, color:'#7a9bbf', maxWidth:540, marginBottom:48 }}>Built for real family caregivers: people working full time jobs, raising kids, and still showing up for their parents.</p>
           </FadeIn>
           <div className="features-grid" style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:16 }}>
             {FEATURES.map((f,i)=>(
@@ -226,9 +226,9 @@ export default function LandingPage() {
           </FadeIn>
           <div className="steps-row" style={{ display:'flex', gap:20, counterReset:'step' }}>
             {[
-              { title:'Add your loved one', text:"Enter their medications, conditions, doctor names, and allergies. Takes about 3 minutes and you only do it once." },
-              { title:'Invite your family', text:"Add a sibling, a spouse, or a home health aide. Everyone sees the same information and knows who is doing what." },
-              { title:'Let CareCircle help', text:"Get reminders for medications, alerts for upcoming appointments, and an AI assistant that answers your questions any time." },
+              { title:'Add the shared record', text:'The family adds medications, appointments, and tasks. You only set each one up once.' },
+              { title:'Invite your family', text:'The patient or an admin adds a sibling, a spouse, or a caregiver. A caregiver or viewer cannot grant access.' },
+              { title:'Let CareCircle help', text:'The family shares the medication log, calendar, and tasks. The AI assistant answers questions when a language model is configured.' },
             ].map((s,i)=>(
               <FadeIn key={i} delay={i*0.12}>
                 <div className="step-card">
@@ -245,20 +245,16 @@ export default function LandingPage() {
       <section style={{ padding:'100px 24px', background:'rgba(255,255,255,.02)', borderTop:'1px solid rgba(0,212,184,.08)', borderBottom:'1px solid rgba(0,212,184,.08)' }}>
         <div style={{ maxWidth:1100, margin:'0 auto' }}>
           <FadeIn>
-            <div style={{ fontFamily:T, fontSize:10, color:'#00d4b8', textTransform:'uppercase', letterSpacing:3, marginBottom:12 }}>Stories</div>
-            <h2 style={{ fontFamily:P, fontSize:'clamp(26px,4vw,42px)', fontWeight:300, lineHeight:1.2, marginBottom:16, color:'#eef2f8' }}>Families who got their lives back</h2>
-            <p style={{ fontSize:16, lineHeight:1.75, color:'#7a9bbf', marginBottom:48 }}>Real caregivers, real relief.</p>
+            <div style={{ fontFamily:T, fontSize:10, color:'#00d4b8', textTransform:'uppercase', letterSpacing:3, marginBottom:12 }}>In the product</div>
+            <h2 style={{ fontFamily:P, fontSize:'clamp(26px,4vw,42px)', fontWeight:300, lineHeight:1.2, marginBottom:16, color:'#eef2f8' }}>What you can count on</h2>
+            <p style={{ fontSize:16, lineHeight:1.75, color:'#7a9bbf', marginBottom:48 }}>What the app does today. These are product facts, not customer reviews.</p>
           </FadeIn>
           <div className="testimonials-grid" style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:20 }}>
-            {TESTIMONIALS.map((t,i)=>(
+            {FACTS.map((t,i)=>(
               <FadeIn key={i} delay={i*0.1}>
                 <div className="testimonial-card">
-                  <div style={{ display:'flex', gap:3, marginBottom:14 }}>
-                    {Array(t.stars).fill(0).map((_,j)=><Star key={j} size={15} fill="#d4a843" color="#d4a843"/>)}
-                  </div>
-                  <div style={{ fontSize:14, lineHeight:1.7, fontStyle:'italic', color:'#eef2f8', marginBottom:16 }}>&ldquo;{t.text}&rdquo;</div>
-                  <div style={{ fontSize:13, fontWeight:700, color:'#00d4b8' }}>{t.name}</div>
-                  <div style={{ fontSize:11, color:'#7a9bbf', marginTop:2 }}>{t.role}</div>
+                  <div style={{ fontSize:14, fontWeight:700, color:'#00d4b8', marginBottom:10 }}>{t.title}</div>
+                  <div style={{ fontSize:14, lineHeight:1.7, color:'#eef2f8' }}>{t.text}</div>
                 </div>
               </FadeIn>
             ))}
@@ -280,7 +276,7 @@ export default function LandingPage() {
             {[
               { ico:'👵', title:'Caring for a parent', desc:'Mom has diabetes and high blood pressure. She sees three different doctors and takes six medications. CareCircle keeps it all in one place so nothing falls through the cracks.', color:'#00d4b8' },
               { ico:'👨‍👩‍👧', title:'Families spread out', desc:"You live two hours away. Your sister lives across the country. CareCircle keeps everyone on the same page without the group chat chaos.", color:'#8060cc' },
-              { ico:'🏥', title:'Community health patients', desc:'If your family gets care at a community health center, CareCircle connects directly with your care team so nothing gets lost between visits.', color:'#4ade80' },
+              { ico:'🏥', title:'Community health patients', desc:'If your family gets care at a community health center, CareCircle is the shared family view between visits. It does not connect to the clinic electronic health record.', color:'#4ade80' },
             ].map((w,i)=>(
               <FadeIn key={i} delay={i*0.1}>
                 <div style={{ background:'rgba(255,255,255,.04)', border:`1px solid ${w.color}25`, borderRadius:18, padding:28, textAlign:'center' }}>
@@ -297,7 +293,7 @@ export default function LandingPage() {
               <div>
                 <div style={{ fontSize:14, fontWeight:700, color:'#4ade80', marginBottom:6 }}>Your family&apos;s information is handled with care</div>
                 <div style={{ fontSize:13, color:'#7a9bbf', lineHeight:1.7 }}>
-                  Uploaded documents are encrypted (AES-256-GCM) at rest, access is role-scoped and audit-logged, and common identifiers like Social Security and phone numbers are redacted from AI prompts before they leave our servers. AI requests are processed by a third-party model provider over encrypted connections. We never sell your family&apos;s health information.
+                  Uploaded documents are encrypted with AES-256-GCM at rest on the server. The operator holds the key. This is a HIPAA-aligned architecture: access is role-scoped and audit-logged. Before a chat message can reach a model, the server replaces known names, street addresses, ZIP codes, phone numbers, Social Security numbers, dates of birth, medical record numbers, and tribal IDs with placeholders. A Social Security number, date of birth, or tribal ID blocks the question, and that message is not sent. This is not full de-identification. Clinical details you type can still be sent to a third-party model provider over an encrypted connection. The app does not encrypt data on the device, and it does not use community-held keys.
                 </div>
               </div>
             </div>
@@ -353,7 +349,7 @@ export default function LandingPage() {
           </div>
           <div style={{ fontSize:12, color:'#7a9bbf' }}>© 2026 Sovereign Shield Technologies LLC · Made with care for caregivers.</div>
           <div style={{ display:'flex', gap:24 }}>
-            {['Privacy','Terms','HIPAA','Contact'].map(l=>(
+            {['Privacy','Terms','Security','Contact'].map(l=>(
               <button key={l} style={{ fontSize:12, color:'#7a9bbf', background:'none', border:'none', cursor:'pointer', fontFamily:O }}>{l}</button>
             ))}
           </div>

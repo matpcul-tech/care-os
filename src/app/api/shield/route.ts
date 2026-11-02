@@ -3,6 +3,14 @@ import { bearerToken, getUserId } from '@/lib/api-auth';
 import { logPhiAccess, requestContext } from '@/lib/audit';
 import { checkRateLimit, tooManyRequests } from '@/lib/rate-limit';
 import { chatComplete, llmConfigError, type LlmMessage } from '@/lib/providers/llm';
+import {
+  BLOCKED_MESSAGE,
+  MODEL_UNAVAILABLE_MESSAGE,
+  knownNamesFromCircle,
+  redactMessages,
+  type CircleNameRow,
+  type KnownNames,
+} from '@/lib/pii-redact';
 
 export const runtime = 'edge';
 
@@ -14,40 +22,38 @@ const RATE_LIMIT = { name: 'shield', max: 30, windowSeconds: 60 };
 const MAX_MESSAGES = 40;
 const MAX_CONTENT_CHARS = 8000;
 
-const PII_PATTERNS = [
-  { pattern: /\b\d{3}-\d{2}-\d{4}\b/g, type: 'SSN', severity: 'CRITICAL', token: '[SSN_PROTECTED]' },
-  { pattern: /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/g, type: 'PHONE', severity: 'HIGH', token: '[PHONE_PROTECTED]' },
-  { pattern: /\b(dob|date of birth|born)[:\s]+\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/gi, type: 'DOB', severity: 'CRITICAL', token: '[DOB_PROTECTED]' },
-  { pattern: /\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/g, type: 'DATE', severity: 'MEDIUM', token: '[DATE_PROTECTED]' },
-  { pattern: /\b[A-Z]{2}\d{6,10}\b/g, type: 'MRN', severity: 'HIGH', token: '[MRN_PROTECTED]' },
-];
+const SYSTEM = `You are CareCircle AI, a family care coordination assistant from Sovereign Shield Technologies LLC. You help families manage medications, coordinate care tasks, understand updates they choose to share from CareIQ, and prepare questions for their care team. You do not diagnose, and you do not invent measurements. Common identifiers are replaced with placeholders before a message reaches you: known patient and circle names, title-style names, street addresses, ZIP codes, phone numbers, Social Security numbers, dates of birth, medical record numbers, tribal enrollment numbers, and dates. This is not full de-identification. Other names and clinical details may remain, so treat everything you receive as sensitive. Be concise and practical.`;
 
-// One linear regex.replace() pass per pattern replaces every occurrence at
-// once — O(n) in the input. (The prior per-match loop called String.replace
-// once per match, which is O(matches x length) and quadratic on dense
-// input.) Each pattern scans the progressively-sanitized text so we never
-// re-flag content already swapped for a token.
-function serverScan(text: string) {
-  let sanitized = text;
-  const flags: string[] = [];
-  let riskScore = 0;
-  for (const p of PII_PATTERNS) {
-    const matches = sanitized.match(p.pattern);
-    if (matches && matches.length > 0) {
-      sanitized = sanitized.replace(p.pattern, p.token);
-      flags.push(p.type);
-      riskScore += p.severity === 'CRITICAL' ? 40 : p.severity === 'HIGH' ? 25 : 10;
-    }
+const EMPTY_NAMES: KnownNames = { patient: [], members: [] };
+
+async function loadCircleNames(patientId: string | null, userId: string): Promise<KnownNames> {
+  const base = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!base || !key) return EMPTY_NAMES;
+  const filter = patientId
+    ? `patient_id=eq.${encodeURIComponent(patientId)}`
+    : `member_user_id=eq.${encodeURIComponent(userId)}`;
+  try {
+    const r = await fetch(
+      `${base}/rest/v1/care_circle?${filter}&select=patient_name,member_name,patient_nickname`,
+      {
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+        cache: 'no-store',
+      },
+    );
+    if (!r.ok) return EMPTY_NAMES;
+    const rows = (await r.json()) as unknown;
+    if (!Array.isArray(rows)) return EMPTY_NAMES;
+    return knownNamesFromCircle(rows as CircleNameRow[]);
+  } catch {
+    return EMPTY_NAMES;
   }
-  return { flags, sanitized, riskScore: Math.min(riskScore, 100) };
 }
-
-const SYSTEM = `You are CareCircle AI, a compassionate family care coordination assistant built by Sovereign Shield Technologies LLC for families caring for elder loved ones through Federally Qualified Health Centers. You help families manage medications, coordinate care tasks, understand clinical updates from CareIQ, and navigate elder care challenges. You speak with warmth, clarity, and respect for both the patient and their family caregivers. Common direct identifiers (Social Security numbers, phone numbers, dates of birth, medical record numbers, and dates) are redacted from user messages before they reach you, but this is not full de-identification — names and clinical details may remain, so treat everything you receive as sensitive health information. Be concise, supportive, and actionable.`;
 
 export async function POST(req: NextRequest) {
   try {
     // Require a valid Supabase session. Without this the endpoint is an open,
-    // billable proxy to the Anthropic API for any anonymous caller.
+    // billable proxy to the model provider for any anonymous caller.
     const userId = await getUserId(bearerToken(req));
     if (!userId) {
       return NextResponse.json({ error: 'authentication required' }, { status: 401 });
@@ -73,65 +79,86 @@ export async function POST(req: NextRequest) {
         content: String(m?.content ?? '').slice(0, MAX_CONTENT_CHARS),
       }));
 
-    // Sanitize EVERY user-authored turn, not just the last, so PHI in earlier
-    // messages is never forwarded to the model. Aggregate the flags/risk.
-    const flags = new Set<string>();
-    let riskScore = 0;
-    const finalMessages = bounded.map((m) => {
-      if (m.role !== 'user') return m;
-      const scan = serverScan(m.content);
-      scan.flags.forEach((f) => flags.add(f));
-      riskScore = Math.min(riskScore + scan.riskScore, 100);
-      return { ...m, content: scan.sanitized };
-    });
+    const scopedPatientId = typeof patientId === 'string' && patientId ? patientId : null;
+    const known = await loadCircleNames(scopedPatientId, userId);
 
+    // Sanitize every turn, not just the last, so identifiers in earlier
+    // messages are never forwarded. Known names from care_circle are
+    // replaced first, then the deterministic patterns.
+    const redacted = redactMessages(bounded, known);
     const timestamp = new Date().toISOString();
-    const auditEntry = {
-      timestamp,
-      patientId: patientId || 'UNKNOWN',
-      flags: Array.from(flags),
-      riskScore,
-      riskLevel: riskScore >= 60 ? 'CRITICAL' : riskScore >= 30 ? 'HIGH' : riskScore >= 10 ? 'MEDIUM' : 'LOW',
-      action: flags.size > 0 ? 'PII_REDACTED' : 'CLEAN_PASS',
-      shieldVersion: '2.1.0',
-    };
 
-    // Audit the AI query: an authenticated user sent (shield-sanitized) PHI
-    // context to the model. Only records patient-scoped queries.
-    if (typeof patientId === 'string' && patientId) {
+    const writeAudit = async (action: string, riskLevel: string) => {
+      if (!scopedPatientId) return;
       const ctx = requestContext(req.headers);
       await logPhiAccess({
-        patientId,
+        patientId: scopedPatientId,
         actorUserId: userId,
         action: 'ai_query',
         resourceType: 'ai_chat',
-        detail: { flags: auditEntry.flags, riskScore, riskLevel: auditEntry.riskLevel, action: auditEntry.action },
+        detail: {
+          flags: redacted.flags,
+          riskScore: redacted.riskScore,
+          riskLevel,
+          action,
+        },
         ip: ctx.ip,
         userAgent: ctx.userAgent,
       });
+    };
+
+    const shieldFor = (action: string, riskLevel: string) => ({
+      timestamp,
+      patientId: scopedPatientId || 'UNKNOWN',
+      flags: redacted.flags,
+      riskScore: redacted.riskScore,
+      riskLevel,
+      action,
+      shieldVersion: '2.2.0',
+    });
+
+    // Block on CRITICAL types (SSN, date of birth, tribal ID), matching
+    // CareIQ. Do not block on a summed score: a phone number plus a date
+    // must still be redacted and sent.
+    if (redacted.critical) {
+      const shield = shieldFor('BLOCKED', 'CRITICAL');
+      await writeAudit(shield.action, shield.riskLevel);
+      return NextResponse.json({ content: BLOCKED_MESSAGE, shield });
     }
 
-    // Provider-agnostic completion (Anthropic by default; any OpenAI-compatible
-    // endpoint — including a self-hosted local model — via LLM_PROVIDER=openai).
+    const riskLevel = redacted.highest;
+    const action = redacted.flags.length > 0 ? 'PII_REDACTED' : 'CLEAN_PASS';
+
+    // No provider key: tell the user plainly and do not call a model.
+    // The technical env name stays server-side in llmConfigError().
     const cfgErr = llmConfigError();
-    if (cfgErr) return NextResponse.json({ error: cfgErr }, { status: 500 });
+    if (cfgErr) {
+      const shield = shieldFor('NOT_CONFIGURED', riskLevel);
+      await writeAudit(shield.action, shield.riskLevel);
+      return NextResponse.json(
+        { error: MODEL_UNAVAILABLE_MESSAGE, content: MODEL_UNAVAILABLE_MESSAGE, shield },
+        { status: 503 },
+      );
+    }
+
+    const shield = shieldFor(action, riskLevel);
+    await writeAudit(shield.action, shield.riskLevel);
 
     let content = '';
     try {
       const out = await chatComplete({
         system: SYSTEM,
-        messages: finalMessages as LlmMessage[],
+        messages: redacted.messages as LlmMessage[],
         maxTokens: 600,
       });
       content = out.text;
     } catch {
-      // Provider/network failure — degrade gracefully; the audit row is
-      // already written above.
+      // Provider or network failure. The audit row is already written.
       content = '';
     }
     return NextResponse.json({
       content: content || 'Unable to connect.',
-      shield: auditEntry,
+      shield,
     });
   } catch {
     return NextResponse.json({ error: 'Shield error' }, { status: 500 });
