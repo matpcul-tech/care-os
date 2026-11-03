@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { T, O, PAGE_PAD, SECTION_LABEL, CARD_BG, CARD_BORDER } from './ui';
 import MfaCard from './MfaCard';
 import ChangePasswordCard from './ChangePasswordCard';
+import { SafetyDisclaimer, SyncSourceList } from '@/components/SyncStatus';
+import type { SyncSource } from '@/lib/sync-status';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -662,6 +664,11 @@ export default function FamilyPage() {
 
       {/* Vitals row from CareIQ Shield */}
       <div style={{ ...SECTION_LABEL, margin: '20px 0 10px' }}>Latest vitals</div>
+      <SyncSourceList
+        sources={(vitals as { sync_sources?: SyncSource[] } | null)?.sync_sources}
+        emptyText="CareIQ has not reported a data source yet."
+      />
+      <SafetyDisclaimer compact />
       {anyVitalEntered ? (
         <>
           <div

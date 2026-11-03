@@ -1,5 +1,13 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { SafetyDisclaimer, SyncSourceList, useNow } from '@/components/SyncStatus';
+import {
+  CHECK_INTERVAL_MS,
+  lastSyncedText,
+  newestSync,
+  syncFreshness,
+  type SyncSource,
+} from '@/lib/sync-status';
 import { useRouter } from 'next/navigation';
 import { loadSession, ensureValidSession, type CCSession } from '@/lib/cc-data';
 
@@ -13,11 +21,11 @@ import { loadSession, ensureValidSession, type CCSession } from '@/lib/cc-data';
  * care_circle row).
  *
  * Data plane:
- *   - Live vitals + biomarker panel: poll {CAREIQ_URL}/api/shield/decrypt
- *     every 5s with the Supabase Bearer token. The endpoint resolves
+ *   - Shared vitals + biomarker panel: poll {CAREIQ_URL}/api/shield/decrypt
+ *     about once a minute (CHECK_INTERVAL_MS) with the Supabase Bearer token. The endpoint resolves
  *     family-member auth via care_circle membership and returns the same
- *     shape the patient sees, so the family LIVE strip is real data, not
- *     a snapshot.
+ *     shape the patient sees. Readings are only as new as the last sync
+ *     from each source, which the strip shows as "Last synced".
  *   - Medications + medication_logs: Supabase REST direct with the
  *     family member's JWT; RLS via is_patient_or_member.
  *   - Appointments + care_circle: same.
@@ -93,6 +101,10 @@ interface ShieldPayload {
   panel_in_range: number;
   decrypted_at: string;
   biomarkers: BiomarkerPanel;
+  /** When CareIQ last received any data for this patient. */
+  updated_at?: string | null;
+  /** One entry per data source with the time CareIQ last received data. */
+  sync_sources?: SyncSource[];
 }
 
 interface Medication {
@@ -339,7 +351,10 @@ function Cell({ value, label, tone }: { value: string; label: string; tone: stri
 // Live shield poller (shared across screens)
 // =========================================================================
 
-const POLL_MS = 5000;
+// Readings change only when a source syncs to CareIQ, so checking every
+// few seconds made old data look live. Check once a minute and show the
+// "Last synced" time per source instead.
+const POLL_MS = CHECK_INTERVAL_MS;
 
 function useShieldPolling(session: CCSession | null): {
   shield: ShieldPayload | null;
@@ -405,6 +420,10 @@ function useShieldPolling(session: CCSession | null): {
 // =========================================================================
 
 function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
+  const now = useNow();
+  const syncedAt = newestSync(shield?.sync_sources ?? []) ?? shield?.updated_at ?? null;
+  const fresh = syncFreshness(syncedAt, now);
+  const freshTone = fresh === 'recent' ? OK : fresh === 'stale' ? '#d4a843' : fresh === 'old' ? '#e8526e' : MUTED;
   const tempEntry = flatBiomarker(shield?.biomarkers, 'body_temperature');
   const cells = [
     {
@@ -504,7 +523,7 @@ function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: INK }}>Shared readings</div>
             <div style={{ fontFamily: T, fontSize: 9, color: MUTED, marginTop: 1 }}>
-              From CareIQ. Refreshes about every 5 seconds. Not a device link.
+              Shared from CareIQ. {lastSyncedText(syncedAt, now)}. Not a device link.
             </div>
           </div>
         </div>
@@ -515,9 +534,8 @@ function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
             gap: 4,
             padding: '4px 10px',
             borderRadius: 12,
-            background: 'rgba(74,222,128,0.14)',
-            color: OK,
-            border: '1px solid rgba(74,222,128,0.4)',
+            color: freshTone,
+            border: `1px solid ${freshTone}66`,
             fontFamily: T,
             fontSize: 9,
             fontWeight: 700,
@@ -526,25 +544,13 @@ function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
             flexShrink: 0,
           }}
         >
-          <span
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: '50%',
-              background: OK,
-              animation: 'pulse 1.5s infinite',
-            }}
-          />
-          {shield?.hr != null ||
-          shield?.spo2 != null ||
-          shield?.bp_systolic != null ||
-          shield?.fasting_glucose != null ||
-          shield?.hrv != null ||
-          shield?.steps != null ||
-          shield?.sleep_hours != null ||
-          tempEntry?.value != null
-            ? 'From CareIQ'
-            : 'No readings'}
+          {fresh === 'never'
+            ? 'No readings'
+            : fresh === 'recent'
+            ? 'Recent'
+            : fresh === 'stale'
+            ? 'Stale'
+            : 'Out of date'}
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
@@ -552,6 +558,10 @@ function LiveWearableStrip({ shield }: { shield: ShieldPayload | null }) {
           <Cell key={c.label} value={c.value} label={c.label} tone={c.tone} />
         ))}
       </div>
+      <div style={{ marginTop: 10 }}>
+        <SyncSourceList sources={shield?.sync_sources} emptyText="CareIQ has not reported a data source yet." />
+      </div>
+      <SafetyDisclaimer compact />
     </div>
   );
 }
@@ -1737,10 +1747,11 @@ function AlertsView({ shield, shieldLoading }: { shield: ShieldPayload | null; s
         </div>
         These notes are calculated in the app from readings CareIQ returns. They are not a remote patient monitoring service, and they do not contact a clinic. Keep this tab open to refresh them.
       </div>
+      <SafetyDisclaimer />
 
       {shieldLoading && alerts.length === 0 && (
         <div style={{ padding: '14px 0', fontSize: 12, color: MUTED }}>
-          Reading live vitals...
+          Reading shared vitals...
         </div>
       )}
 

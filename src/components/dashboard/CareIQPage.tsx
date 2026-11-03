@@ -7,6 +7,8 @@ import {
   type AlertRow,
 } from '@/lib/cc-data';
 import { T, PAGE_PAD, SECTION_LABEL, CARD_BG, CARD_BORDER } from './ui';
+import { SafetyDisclaimer, SyncSourceList } from '@/components/SyncStatus';
+import type { SyncSource } from '@/lib/sync-status';
 
 const CAREIQ_URL =
   process.env.NEXT_PUBLIC_CAREIQ_URL || 'https://care-iq-sable.vercel.app';
@@ -751,6 +753,13 @@ export default function CareIQPage({ session }: { session: CCSession }) {
           {loaded && <ShieldBadge decryptedAt={decryptedAt} />}
         </div>
       </div>
+
+      {loaded && (
+        <div style={{ marginBottom: 14 }}>
+          <SyncSourceList sources={(payload as { sync_sources?: SyncSource[] } | null)?.sync_sources} />
+        </div>
+      )}
+      <SafetyDisclaimer />
 
       {loaded && (payload!.panel_in_range > 0 || payload!.panel_flagged > 0) && (
         <div
