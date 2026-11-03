@@ -42,7 +42,12 @@ export default function ResetPage() {
   const [doneReset, setDoneReset] = useState(false);
 
   useEffect(() => {
-    const t = new URLSearchParams(window.location.search).get('token');
+    // Supabase Auth recovery links land here with the session in the URL
+    // fragment: #access_token=...&type=recovery (or #error_description=...).
+    const h = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const t = h.get('type') === 'recovery' ? h.get('access_token') : null;
+    if (h.get('error_description')) setError('This reset link is invalid or has expired. Request a new one.');
+    if (t) window.history.replaceState(null, '', window.location.pathname);
     setToken(t);
     setReady(true);
   }, []);
@@ -77,7 +82,7 @@ export default function ResetPage() {
       const r = await fetch('/api/auth/reset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, new_password: next }),
+        body: JSON.stringify({ access_token: token, new_password: next }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setError(d.error || 'Could not reset password.'); return; }
@@ -154,7 +159,7 @@ export default function ResetPage() {
       <div style={card}>
         {sent ? (
           <div style={{ fontSize: 13, color: '#7a9bbf', lineHeight: 1.7 }}>
-            If an account exists for that email, a reset link is on its way. The link is valid for 30 minutes.
+            If an account exists for that email, a reset link is on its way. The link can be used once and expires soon.
             <div style={{ marginTop: 16 }}>
               <Link href="/login" style={{ color: '#00d4b8', textDecoration: 'underline', textUnderlineOffset: 3 }}>Back to sign in</Link>
             </div>

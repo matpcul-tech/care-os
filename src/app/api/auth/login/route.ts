@@ -29,14 +29,24 @@ function isEmail(s: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
 
+// The shared Supabase project uses CareIQ's care_circle layout, which has no
+// patient_name column (the patient's name lives encrypted in CareIQ's
+// patients.profile_encrypted). select=* keeps this working on both the
+// CareIQ layout and the older care-os layout; the display name is taken from
+// patient_name when present, otherwise the member's patient_nickname.
 async function lookupCircle(userId: string): Promise<CircleRow | null> {
   const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/care_circle?member_user_id=eq.${encodeURIComponent(userId)}&select=patient_id,patient_name&limit=1`,
+    `${SUPABASE_URL}/rest/v1/care_circle?member_user_id=eq.${encodeURIComponent(userId)}&select=*&order=created_at.asc&limit=1`,
     { headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` }, cache: 'no-store' },
   );
-  if (!r.ok) return null;
-  const rows = (await r.json()) as CircleRow[];
-  return rows[0] || null;
+  if (!r.ok) {
+    console.error(`[login] care_circle lookup failed with status ${r.status}`);
+    return null;
+  }
+  const rows = (await r.json()) as Array<{ patient_id?: string; patient_name?: string | null; patient_nickname?: string | null }>;
+  const row = rows[0];
+  if (!row?.patient_id) return null;
+  return { patient_id: row.patient_id, patient_name: row.patient_name ?? row.patient_nickname ?? null };
 }
 
 /**

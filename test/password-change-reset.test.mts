@@ -91,17 +91,15 @@ test("change-password: with MFA on, a valid code succeeds", async () => {
   assert.equal((await readJson(res)).status, 200);
 });
 
-// ---------------- request-reset ----------------
-function reqResetSetup(found: boolean, opts: { emailLimit?: boolean } = {}) {
+// ---------------- request-reset (Supabase Auth recovery) ----------------
+function reqResetSetup(opts: { emailLimit?: boolean; recoverStatus?: number } = {}) {
   stub.reset();
   stub.on("/rest/v1/rpc/rate_limit_hit", (c) => {
     const key = JSON.parse(c.body || "{}").p_key as string;
     if (opts.emailLimit === false && key.startsWith("reset-req-email:")) return { json: false };
     return { json: true };
   });
-  stub.on("/rest/v1/care_circle?member_email", () => ({ json: found ? [{ member_user_id: "u1", member_name: "Fam" }] : [] }));
-  stub.on("/rest/v1/password_reset_tokens", () => ({ json: {} }));
-  stub.on("api.resend.com", () => ({ json: { id: "email_1" } }));
+  stub.on("/auth/v1/recover", () => ({ status: opts.recoverStatus ?? 200, json: {} }));
 }
 
 function reqResetReq(email = "fam@x.com") {
@@ -111,92 +109,88 @@ function reqResetReq(email = "fam@x.com") {
   });
 }
 
-test("request-reset: known email mints a token and emails a /reset link", async () => {
-  reqResetSetup(true);
-  const res = await requestReset.POST(reqResetReq());
-  const { status, body } = await readJson(res);
-  assert.equal(status, 200);
-  assert.match(body.message, /reset link/i);
-  assert.ok(stub.calls.some((c) => c.method === "POST" && c.url.endsWith("/password_reset_tokens")));
-  const mail = stub.calls.find((c) => c.url.includes("api.resend.com"));
-  assert.ok(mail, "an email must be sent");
-  assert.match(JSON.parse(mail!.body || "{}").html, /\/reset\?token=/);
-});
-
-test("request-reset: unknown email returns the SAME generic message, no token, no email", async () => {
-  reqResetSetup(false);
-  const res = await requestReset.POST(reqResetReq("nobody@x.com"));
+test("request-reset: calls Supabase recover by auth email with a /reset redirect, no care_circle lookup", async () => {
+  reqResetSetup();
+  const res = await requestReset.POST(reqResetReq("Fam@X.com"));
   const { status, body } = await readJson(res);
   assert.equal(status, 200);
   assert.match(body.message, /If an account exists/i);
-  assert.equal(stub.calls.some((c) => c.method === "POST" && c.url.endsWith("/password_reset_tokens")), false);
-  assert.equal(stub.calls.some((c) => c.url.includes("api.resend.com")), false);
+  const rec = stub.calls.find((c) => c.url.includes("/auth/v1/recover"));
+  assert.ok(rec, "recover must be called");
+  assert.equal(JSON.parse(rec!.body || "{}").email, "fam@x.com");
+  assert.ok(rec!.url.includes(encodeURIComponent("https://app.test/reset")));
+  assert.equal(stub.calls.some((c) => c.url.includes("care_circle")), false);
+  assert.equal(stub.calls.some((c) => c.url.includes("password_reset_tokens")), false);
 });
 
-test("request-reset: over the per-email limit still returns generic, no token", async () => {
-  reqResetSetup(true, { emailLimit: false });
-  const res = await requestReset.POST(reqResetReq());
-  const { status, body } = await readJson(res);
+test("request-reset: mailer failure still returns the generic message and logs", async () => {
+  reqResetSetup({ recoverStatus: 500 });
+  const orig = console.error; const logs: string[] = [];
+  console.error = (m: string) => { logs.push(String(m)); };
+  try {
+    const { status, body } = await readJson(await requestReset.POST(reqResetReq()));
+    assert.equal(status, 200);
+    assert.match(body.message, /If an account exists/i);
+  } finally { console.error = orig; }
+  assert.ok(logs.some((l) => /recover failed/.test(l) && !l.includes("fam@x.com")));
+});
+
+test("request-reset: over the per-email limit returns generic and does not call recover", async () => {
+  reqResetSetup({ emailLimit: false });
+  const { status, body } = await readJson(await requestReset.POST(reqResetReq()));
   assert.equal(status, 200);
   assert.match(body.message, /If an account exists/i);
-  assert.equal(stub.calls.some((c) => c.method === "POST" && c.url.endsWith("/password_reset_tokens")), false);
+  assert.equal(stub.calls.some((c) => c.url.includes("/auth/v1/recover")), false);
 });
 
-// ---------------- reset (consume) ----------------
-function resetSetup(token: string) {
-  const state = { used: false };
-  const hash = sha256(token);
+test("app-url: falls back to carecircleos.vercel.app", async () => {
+  const { appUrl } = await import("../src/lib/app-url.ts");
+  const prev = process.env.NEXT_PUBLIC_APP_URL;
+  delete process.env.NEXT_PUBLIC_APP_URL;
+  assert.equal(appUrl(), "https://carecircleos.vercel.app");
+  process.env.NEXT_PUBLIC_APP_URL = "https://x.test/";
+  assert.equal(appUrl(), "https://x.test");
+  process.env.NEXT_PUBLIC_APP_URL = prev;
+});
+
+// ---------------- reset (recovery session) ----------------
+function resetSetup(validToken: string) {
+  const state = { updated: false, loggedOut: false };
   stub.reset();
   stub.on("/rest/v1/rpc/rate_limit_hit", () => ({ json: true }));
-  stub.on("/rest/v1/password_reset_tokens", (c) => {
-    const matches = c.url.includes(`token_hash=eq.${hash}`);
-    if (c.method === "GET") return { json: matches && !state.used ? [{ user_id: "u1", email: "fam@x.com" }] : [] };
-    if (c.method === "PATCH") {
-      if (matches && !state.used) { state.used = true; return { json: [{ user_id: "u1" }] }; }
-      return { json: [] };
-    }
-    return undefined;
+  stub.on("/auth/v1/logout", () => { state.loggedOut = true; return { status: 204, text: "" }; });
+  stub.on("/auth/v1/user", (c) => {
+    if (c.headers.Authorization !== `Bearer ${validToken}`) return { status: 401, json: { msg: "bad jwt" } };
+    if (c.method === "PUT") { state.updated = true; return { json: { id: "u1" } }; }
+    return { json: { id: "u1", email: "fam@x.com" } };
   });
-  stub.on("/auth/v1/admin/users/", (c) => (c.method === "PUT" ? { json: {} } : undefined));
   return state;
 }
 
 function resetReq(token: string, pw: string) {
   return makeReq("https://care/api/auth/reset", {
     method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "2.2.2.2" },
-    body: JSON.stringify({ token, new_password: pw }),
+    body: JSON.stringify({ access_token: token, new_password: pw }),
   });
 }
 
-test("reset: an unknown/expired token is rejected 400", async () => {
+test("reset: an invalid recovery token is rejected 400", async () => {
   resetSetup("realtoken");
-  const res = await reset.POST(resetReq("wrongtoken", "Str0ng-New-Pass!"));
-  const { status, body } = await readJson(res);
+  const { status, body } = await readJson(await reset.POST(resetReq("wrongtoken", "Str0ng-New-Pass!")));
   assert.equal(status, 400);
   assert.match(body.error, /invalid or expired/);
 });
 
-test("reset: a weak password is rejected 400 and does NOT burn the token", async () => {
+test("reset: a weak password is rejected 400 and nothing is updated", async () => {
   const state = resetSetup("tok-abc");
-  const res = await reset.POST(resetReq("tok-abc", "weak"));
-  assert.equal((await readJson(res)).status, 400);
-  assert.equal(state.used, false, "token must survive a rejected weak password");
-  // A follow-up with a strong password then succeeds.
-  const ok = await reset.POST(resetReq("tok-abc", "Str0ng-New-Pass!"));
-  assert.equal((await readJson(ok)).status, 200);
-  assert.equal(state.used, true);
+  assert.equal((await readJson(await reset.POST(resetReq("tok-abc", "weak")))).status, 400);
+  assert.equal(state.updated, false);
 });
 
-test("reset: success updates the password and is single-use", async () => {
+test("reset: success updates the password with the recovery session then revokes it", async () => {
   const state = resetSetup("tok-xyz");
-  const first = await reset.POST(resetReq("tok-xyz", "Str0ng-New-Pass!"));
-  assert.equal((await readJson(first)).status, 200);
-  assert.equal(state.used, true);
-  const put = stub.calls.find((c) => c.method === "PUT" && c.url.includes("/auth/v1/admin/users/u1"));
-  assert.ok(put);
-  // Reusing the same token is rejected.
-  const second = await reset.POST(resetReq("tok-xyz", "An0ther-Good-Pass!"));
-  const { status, body } = await readJson(second);
-  assert.equal(status, 400);
-  assert.match(body.error, /already been used|invalid or expired/);
+  assert.equal((await readJson(await reset.POST(resetReq("tok-xyz", "Str0ng-New-Pass!")))).status, 200);
+  assert.equal(state.updated, true);
+  assert.equal(state.loggedOut, true);
+  assert.equal(stub.calls.some((c) => c.url.includes("/auth/v1/admin/")), false);
 });

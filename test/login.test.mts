@@ -104,3 +104,20 @@ test("invalid email shape is rejected 400 before any grant", async () => {
   assert.equal(status, 400);
   assert.equal(stub.calls.some((c) => c.url.includes("/auth/v1/token")), false);
 });
+
+test("login loads the circle from the CareIQ care_circle layout (no patient_name column)", async () => {
+  setup({ grantOk: true, mfaEnabled: false });
+  // Prepend a CareIQ-layout responder: columns that actually exist in the shared DB.
+  (stub as unknown as { routes: Array<{ match: string; responder: unknown }> }).routes.unshift({
+    match: "/rest/v1/care_circle?member_user_id",
+    responder: (c: { url: string }) =>
+      c.url.includes("patient_name")
+        ? { status: 400, json: { code: "42703", message: "column care_circle.patient_name does not exist" } }
+        : { json: [{ id: "cc-1", patient_id: "patient-9", member_email: "fam@x.com", member_name: "Test Member", relationship: "child", alert_level: "critical", member_user_id: "member-1", patient_nickname: "Grandma Test" }] },
+  });
+  const { status, body } = await readJson(await POST(loginReq("fam2@x.com", "pw", "9.9.9.9")));
+  assert.equal(status, 200);
+  assert.equal(body.no_circle, false);
+  assert.equal(body.circle.patient_id, "patient-9");
+  assert.equal(body.circle.patient_name, "Grandma Test");
+});
