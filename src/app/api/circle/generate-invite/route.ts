@@ -135,7 +135,6 @@ export async function POST(req: NextRequest) {
             patient_name,
             suggested_relationship,
             suggested_alert_level,
-            suggested_role,
             expires_at,
           },
         ]),

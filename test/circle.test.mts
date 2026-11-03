@@ -133,7 +133,7 @@ test("SECURITY: a caregiver cannot add a circle member", async () => {
   assert.equal(stub.calls.some((c) => c.url.includes("api.resend.com")), false);
 });
 
-test("an admin who is not the patient can add a circle member", async () => {
+test("a member who is not the patient cannot add a circle member (care_circle has no role column)", async () => {
   stub.reset();
   stub.on("/auth/v1/user", () => ({ json: { id: "admin-1" } }));
   stub.on("/rest/v1/care_circle", (c) => {
@@ -157,9 +157,9 @@ test("an admin who is not the patient can add a circle member", async () => {
       }),
     }),
   );
-  const { status, body } = await readJson(res);
-  assert.equal(status, 200);
-  assert.equal(body.member.member_email, "sis@x.com");
+  const { status } = await readJson(res);
+  assert.equal(status, 403);
+  assert.ok(!stub.calls.some((c) => c.method === "POST" && c.url.includes("/rest/v1/care_circle")), "no insert");
 });
 
 test("authorized POST adds a member and sends the invite email", async () => {
@@ -222,13 +222,13 @@ test("POST rejects an invalid care_role", async () => {
   assert.match(body.error, /care_role/);
 });
 
-test("authorized POST persists the chosen care_role", async () => {
+test("authorized POST writes only real care_circle columns", async () => {
   stub.reset();
   stub.on("/auth/v1/user", () => ({ json: { id: "patient-1" } }));
   let insertedRole: string | undefined;
   stub.on("/rest/v1/care_circle", (c) => {
     if (c.method === "POST") {
-      insertedRole = JSON.parse(c.body || "[]")[0]?.care_role;
+      insertedRole = Object.keys(JSON.parse(c.body || "[]")[0] || {}).sort().join(",");
       return { json: [{ id: "new", ...JSON.parse(c.body || "[]")[0] }] };
     }
     return undefined;
@@ -243,5 +243,5 @@ test("authorized POST persists the chosen care_role", async () => {
   );
   const { status } = await readJson(res);
   assert.equal(status, 200);
-  assert.equal(insertedRole, "viewer");
+  assert.equal(insertedRole, "alert_level,member_email,member_name,patient_id,relationship");
 });

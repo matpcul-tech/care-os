@@ -63,29 +63,16 @@ export async function isPatientOrMember(
 }
 
 /**
- * True when `userId` is the patient, or a care_circle member whose
- * care_role is admin. Caregivers and viewers are not included. Fails
- * closed on any error. Used for granting access (adding members).
+ * True when `userId` is the patient. CareIQ's care_circle table has no
+ * role column, so there is no member admin to check for; filtering on a
+ * nonexistent care_role column only produced a PostgREST error. Until a
+ * role column exists, only the patient may grant access (fails closed).
+ * Used for granting access (adding members).
  */
 export async function isPatientOrAdmin(
   userId: string,
   patientId: string,
 ): Promise<boolean> {
   if (!userId || !patientId) return false;
-  if (userId === patientId) return true;
-  if (!SUPABASE_URL || !SERVICE_ROLE) return false;
-  const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/care_circle` +
-      `?patient_id=eq.${encodeURIComponent(patientId)}` +
-      `&member_user_id=eq.${encodeURIComponent(userId)}` +
-      `&care_role=eq.admin` +
-      `&select=id&limit=1`,
-    {
-      headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
-      cache: 'no-store',
-    },
-  );
-  if (!r.ok) return false;
-  const rows = (await r.json()) as unknown[];
-  return Array.isArray(rows) && rows.length > 0;
+  return userId === patientId;
 }

@@ -179,7 +179,14 @@ export async function POST(req: NextRequest) {
     const insertRes = await sb(
       'POST',
       'care_circle',
-      [{ patient_id: patientId, member_email, member_name, relationship, alert_level, care_role }],
+      [{
+        patient_id: patientId,
+        member_email,
+        member_name,
+        relationship,
+        alert_level,
+        ...(body.patient_name ? { patient_nickname: body.patient_name } : {}),
+      }],
       'return=representation',
     );
 
