@@ -49,7 +49,7 @@ export async function authVault(req: NextRequest): Promise<VaultAuthResult> {
   const user = (await userRes.json()) as { id: string };
 
   const ccRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/care_circle?member_user_id=eq.${user.id}&select=patient_id,care_role&limit=1`,
+    `${SUPABASE_URL}/rest/v1/care_circle?member_user_id=eq.${user.id}&select=*&limit=1`,
     {
       headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
       cache: "no-store",
@@ -58,6 +58,8 @@ export async function authVault(req: NextRequest): Promise<VaultAuthResult> {
   if (!ccRes.ok) {
     return { ok: false, status: 500, message: "care_circle lookup failed" };
   }
+  // select=* because CareIQ's care_circle layout has no care_role column;
+  // a missing role falls back to caregiver below.
   const rows = (await ccRes.json()) as Array<{ patient_id: string; care_role?: string }>;
   if (rows.length === 0) {
     return { ok: false, status: 403, message: "no care circle membership" };

@@ -35,7 +35,7 @@ async function loadCircleNames(patientId: string | null, userId: string): Promis
     : `member_user_id=eq.${encodeURIComponent(userId)}`;
   try {
     const r = await fetch(
-      `${base}/rest/v1/care_circle?${filter}&select=patient_name,member_name,patient_nickname`,
+      `${base}/rest/v1/care_circle?${filter}&select=*`,
       {
         headers: { apikey: key, Authorization: `Bearer ${key}` },
         cache: 'no-store',

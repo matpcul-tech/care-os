@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkRateLimit, clientIp } from '@/lib/rate-limit';
-import { createResetToken } from '@/lib/password-reset';
-import { sendEmail } from '@/lib/providers/email';
+import { appUrl } from '@/lib/app-url';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
-const SERVICE_ROLE = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-const APP_URL = (process.env.NEXT_PUBLIC_APP_URL || 'https://care-os.vercel.app').replace(/\/$/, '');
+const ANON_KEY = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim();
 
 const IP_LIMIT = { name: 'reset-req-ip', max: 15, windowSeconds: 900 };
 const EMAIL_LIMIT = { name: 'reset-req-email', max: 5, windowSeconds: 900 };
@@ -21,13 +19,16 @@ function isEmail(s: string) {
 }
 
 /**
- * Start a password reset. Resolves the member by their care_circle
- * member_email (no auth-schema access needed), mints a single-use token, and
- * emails a reset link. Always returns the same generic message so an
- * attacker cannot enumerate accounts. Rate-limited per IP and per email.
+ * Start a password reset using Supabase Auth's built-in recovery flow
+ * (POST /auth/v1/recover). Supabase resolves the user by their auth email,
+ * so no care_circle row is required, mints and stores the single-use
+ * recovery token itself, and sends the email through the project's
+ * configured Auth mailer. The link lands on <app>/reset with a recovery
+ * session in the URL fragment. Always returns the same generic message so an
+ * attacker cannot enumerate accounts.
  */
 export async function POST(req: NextRequest) {
-  if (!SUPABASE_URL || !SERVICE_ROLE) {
+  if (!SUPABASE_URL || !ANON_KEY) {
     return NextResponse.json({ error: 'server misconfigured' }, { status: 500 });
   }
 
@@ -43,45 +44,28 @@ export async function POST(req: NextRequest) {
   }
   if (!isEmail(email)) return NextResponse.json({ error: 'valid email required' }, { status: 400 });
 
-  // Per-email throttle (still returns the generic message once over limit, to
-  // avoid signaling existence via status differences).
   if (!(await checkRateLimit(EMAIL_LIMIT, email))) {
     return NextResponse.json(GENERIC);
   }
 
-  // Resolve the member from care_circle (service role bypasses RLS).
-  const lookup = await fetch(
-    `${SUPABASE_URL}/rest/v1/care_circle?member_email=eq.${encodeURIComponent(email)}` +
-      `&select=member_user_id,member_name&limit=1`,
-    { headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` }, cache: 'no-store' },
-  );
-  const rows = lookup.ok
-    ? ((await lookup.json()) as Array<{ member_user_id: string | null; member_name: string | null }>)
-    : [];
-  const member = rows[0];
-
-  if (member?.member_user_id) {
-    const token = await createResetToken(member.member_user_id, email);
-    if (token) {
-      const link = `${APP_URL}/reset?token=${encodeURIComponent(token)}`;
-      const name = member.member_name || 'there';
-      const html = `
-<div style="font-family:system-ui,-apple-system,sans-serif;max-width:560px;margin:0 auto;color:#1a1a1a">
-  <h2 style="color:#00a890;margin:0 0 12px">Reset your CareCircle password</h2>
-  <p>Hi ${name},</p>
-  <p>We received a request to reset your CareCircle password. This link is valid for 30 minutes and can be used once:</p>
-  <p>
-    <a href="${link}" style="display:inline-block;padding:10px 18px;background:#00a890;color:#fff;text-decoration:none;border-radius:6px">
-      Choose a new password
-    </a>
-  </p>
-  <p style="font-size:12px;color:#666;margin-top:24px">
-    If you did not request this, you can ignore this email; your password will not change.
-  </p>
-</div>`.trim();
-      // Best-effort send; the generic response does not depend on it.
-      await sendEmail({ to: email, subject: 'Reset your CareCircle password', html });
+  const redirectTo = `${appUrl()}/reset`;
+  try {
+    const r = await fetch(
+      `${SUPABASE_URL}/auth/v1/recover?redirect_to=${encodeURIComponent(redirectTo)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: ANON_KEY },
+        body: JSON.stringify({ email }),
+        cache: 'no-store',
+      },
+    );
+    if (!r.ok) {
+      // Log status only (no email, no body) so ops can see mailer problems
+      // such as SMTP not configured or the Auth email rate limit being hit.
+      console.error(`[request-reset] Supabase recover failed with status ${r.status}; check Auth SMTP settings and redirect URL allow list`);
     }
+  } catch {
+    console.error('[request-reset] Supabase recover request errored (network)');
   }
 
   return NextResponse.json(GENERIC);
