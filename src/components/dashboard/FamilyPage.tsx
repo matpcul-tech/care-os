@@ -45,12 +45,10 @@ const ROLE_LABEL: Record<'admin' | 'caregiver' | 'viewer', string> = {
 
 interface AlertRow {
   id: string;
-  patient_id: string;
   metric: string;
   severity: Severity;
   recommendation: string;
   fired_at: string;
-  delivery_count: number;
 }
 
 interface ShieldVitals {
@@ -226,14 +224,16 @@ export default function FamilyPage() {
         if (cancelled) return;
         setMyRow(me);
 
-        const alertsRes = await sbAuthed(
-          valid.access_token,
-          `care_circle_alerts?patient_id=eq.${me.patient_id}&order=fired_at.desc&limit=50&select=*`,
+        // Server route: checks the caller still has a care_circle row for
+        // this patient, then reads with the caller's JWT so RLS applies too.
+        const alertsRes = await fetch(
+          `/api/circle/alerts?patient_id=${encodeURIComponent(me.patient_id)}`,
+          { headers: { Authorization: `Bearer ${valid.access_token}` }, cache: 'no-store' },
         );
         if (!alertsRes.ok) {
           throw new Error(`alerts ${alertsRes.status}: ${await alertsRes.text()}`);
         }
-        const alertRows = (await alertsRes.json()) as AlertRow[];
+        const alertRows = ((await alertsRes.json()) as { alerts?: AlertRow[] }).alerts ?? [];
         if (cancelled) return;
         setAlerts(alertRows);
       } catch (e) {
