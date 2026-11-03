@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server';
  * Shared authentication/authorization helpers for the edge API routes.
  *
  * These routes talk to Supabase with the service-role key (RLS bypass), so
- * they MUST enforce access control themselves — the database will not do it
+ * they MUST enforce access control themselves, the database will not do it
  * for them. `getUserId` verifies a caller's Supabase JWT; `isPatientOrMember`
  * mirrors the SQL is_patient_or_member() policy used by the RLS-gated tables:
  * the caller is authorized for a patient if they ARE that patient (their
@@ -62,6 +62,37 @@ export async function isPatientOrMember(
   return Array.isArray(rows) && rows.length > 0;
 }
 
+export type CareRole = 'admin' | 'caregiver' | 'viewer';
+
+/**
+ * The caller's standing for `patientId`: 'patient' when they are the
+ * patient, their care_circle.care_role when they are a member, or null.
+ * A missing or unknown role reads as 'caregiver'. Fails closed (null).
+ */
+export async function getCircleRole(
+  userId: string,
+  patientId: string,
+): Promise<'patient' | CareRole | null> {
+  if (!userId || !patientId) return null;
+  if (userId === patientId) return 'patient';
+  if (!SUPABASE_URL || !SERVICE_ROLE) return null;
+  const r = await fetch(
+    `${SUPABASE_URL}/rest/v1/care_circle` +
+      `?patient_id=eq.${encodeURIComponent(patientId)}` +
+      `&member_user_id=eq.${encodeURIComponent(userId)}` +
+      `&select=*&limit=1`,
+    {
+      headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
+      cache: 'no-store',
+    },
+  );
+  if (!r.ok) return null;
+  const rows = (await r.json()) as Array<{ care_role?: string }>;
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const role = rows[0].care_role;
+  return role === 'admin' || role === 'viewer' ? role : 'caregiver';
+}
+
 /**
  * True when `userId` is the patient, or a care_circle member whose
  * care_role is admin. Caregivers and viewers are not included. Fails
@@ -71,21 +102,6 @@ export async function isPatientOrAdmin(
   userId: string,
   patientId: string,
 ): Promise<boolean> {
-  if (!userId || !patientId) return false;
-  if (userId === patientId) return true;
-  if (!SUPABASE_URL || !SERVICE_ROLE) return false;
-  const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/care_circle` +
-      `?patient_id=eq.${encodeURIComponent(patientId)}` +
-      `&member_user_id=eq.${encodeURIComponent(userId)}` +
-      `&care_role=eq.admin` +
-      `&select=id&limit=1`,
-    {
-      headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
-      cache: 'no-store',
-    },
-  );
-  if (!r.ok) return false;
-  const rows = (await r.json()) as unknown[];
-  return Array.isArray(rows) && rows.length > 0;
+  const role = await getCircleRole(userId, patientId);
+  return role === 'patient' || role === 'admin';
 }

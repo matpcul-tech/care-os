@@ -79,6 +79,7 @@ function SignupInner() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [hasAccount, setHasAccount] = useState(false);
   const [phone, setPhone] = useState('');
   const [relationship, setRelationship] = useState(RELATIONSHIPS[0]);
   const [alertLevel, setAlertLevel] = useState<AlertLevel>('informational');
@@ -117,9 +118,13 @@ function SignupInner() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       setSubmitErr('A valid email is required.'); return;
     }
-    const pw = validatePassword(password, { email: email.trim(), name: name.trim() });
-    if (!pw.ok) {
-      setSubmitErr(pw.reason || 'Password does not meet requirements.'); return;
+    if (hasAccount) {
+      if (!password) { setSubmitErr('Enter your existing password.'); return; }
+    } else {
+      const pw = validatePassword(password, { email: email.trim(), name: name.trim() });
+      if (!pw.ok) {
+        setSubmitErr(pw.reason || 'Password does not meet requirements.'); return;
+      }
     }
     setSubmitting(true);
     setSubmitErr(null);
@@ -135,10 +140,14 @@ function SignupInner() {
           member_phone: phone.trim() || undefined,
           relationship,
           alert_level: alertLevel,
+          existing_account: hasAccount || undefined,
         }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'signup failed');
+      if (!r.ok) {
+        if (d.debug?.existing_account) setHasAccount(true);
+        throw new Error(d.error || 'signup failed');
+      }
       const data = d as RedeemResponse;
 
       // Persist session so the dashboard can fetch this family member's data.
@@ -265,10 +274,17 @@ function SignupInner() {
             <span style={label}>Email</span>
             <input style={input} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
 
-            <span style={label}>Password (12+ chars, mix of letters/numbers/symbols)</span>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '8px 0' }}>
+              <input type="checkbox" checked={hasAccount} onChange={(e) => setHasAccount(e.target.checked)} />
+              <span>I already have a CareCircle or CareIQ account</span>
+            </label>
+
+            <span style={label}>
+              {hasAccount ? 'Your existing password' : 'Password (12+ chars, mix of letters/numbers/symbols)'}
+            </span>
             <input style={input} type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
 
-            <span style={label}>Phone (for emergency SMS — optional)</span>
+            <span style={label}>Phone (for emergency SMS, optional)</span>
             <input style={input} type="tel" placeholder="+1 555 555 0123" value={phone} onChange={(e) => setPhone(e.target.value)} />
 
             <span style={label}>Relationship to {invite.patient_name || 'patient'}</span>
@@ -333,7 +349,7 @@ function SignupInner() {
             </button>
 
             <p style={{ marginTop: 14, fontSize: 11, color: '#7a9bbf', lineHeight: 1.6 }}>
-              By joining, you&apos;ll receive {alertLevel === 'critical' ? 'critical-only' : 'all'} health alerts about {invite.patient_name || 'your loved one'}. Alerts name which metric crossed a threshold and what to do — not raw lab values. Sign in for full details.
+              By joining, you&apos;ll receive {alertLevel === 'critical' ? 'critical-only' : 'all'} health alerts about {invite.patient_name || 'your loved one'}. Alerts name which metric crossed a threshold and what to do, not raw lab values. Sign in for full details.
             </p>
           </div>
         )}

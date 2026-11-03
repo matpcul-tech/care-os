@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { bearerToken, getUserId, isPatientOrAdmin, isPatientOrMember } from '@/lib/api-auth';
+import { bearerToken, getCircleRole, getUserId, isPatientOrMember } from '@/lib/api-auth';
 import { checkRateLimit, clientIp } from '@/lib/rate-limit';
 import { sendEmail } from '@/lib/providers/email';
 
@@ -29,17 +29,24 @@ async function authorizeForPatient(
 }
 
 /**
- * Only the patient, or a member whose care_role is admin, may add
- * circle members or otherwise grant access.
+ * Only the patient, or a member whose care_role is admin, may add circle
+ * members. A member may not grant a role higher than their own; the
+ * patient may grant any role.
  */
 async function authorizeToGrant(
   req: NextRequest,
   patientId: string,
+  grantRole: CareRole,
 ): Promise<NextResponse | null> {
   const userId = await getUserId(bearerToken(req));
   if (!userId) return bad('authentication required', 401);
-  if (!(await isPatientOrAdmin(userId, patientId))) {
+  const role = await getCircleRole(userId, patientId);
+  if (role !== 'patient' && role !== 'admin') {
     return bad('only the patient or an admin can add circle members', 403);
+  }
+  const RANK: Record<CareRole, number> = { viewer: 0, caregiver: 1, admin: 2 };
+  if (role !== 'patient' && RANK[grantRole] > RANK[role]) {
+    return bad('you cannot grant a role higher than your own', 403);
   }
   return null;
 }
@@ -115,7 +122,7 @@ async function sendInviteEmail(args: {
     </a>
   </p>
   <p style="font-size:12px;color:#666;margin-top:24px">
-    Sent by CareCircle. Health alerts name the metric and guidance only — never raw lab values.
+    Sent by CareCircle. Health alerts name the metric and guidance only, never raw lab values.
   </p>
 </div>`.trim();
 
@@ -173,13 +180,21 @@ export async function POST(req: NextRequest) {
       return bad('care_role must be "admin", "caregiver", or "viewer"');
     }
 
-    const denied = await authorizeToGrant(req, patientId);
+    const denied = await authorizeToGrant(req, patientId, care_role);
     if (denied) return denied;
 
     const insertRes = await sb(
       'POST',
       'care_circle',
-      [{ patient_id: patientId, member_email, member_name, relationship, alert_level, care_role }],
+      [{
+        patient_id: patientId,
+        member_email,
+        member_name,
+        relationship,
+        alert_level,
+        care_role,
+        ...(body.patient_name ? { patient_nickname: body.patient_name } : {}),
+      }],
       'return=representation',
     );
 

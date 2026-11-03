@@ -16,7 +16,7 @@ type AlertLevel = (typeof ALERT_LEVELS)[number];
 const CARE_ROLES = ['admin', 'caregiver', 'viewer'] as const;
 type CareRole = (typeof CARE_ROLES)[number];
 
-// Unambiguous alphabet — no 0/O/1/I.
+// Unambiguous alphabet, no 0/O/1/I.
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 interface GenerateInviteBody {
@@ -33,7 +33,7 @@ interface SupabaseUser {
   user_metadata?: Record<string, unknown> | null;
 }
 
-// CareIQ may live on a different origin — keep CORS open for trusted clients.
+// CareIQ may live on a different origin, keep CORS open for trusted clients.
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',

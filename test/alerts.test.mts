@@ -233,3 +233,16 @@ test("invalid JSON body returns 400", async () => {
   const { status } = await readJson(res);
   assert.equal(status, 400);
 });
+
+test("viewers get no alert SMS; caregivers with a phone do", async () => {
+  stub.reset();
+  circleMembers([
+    { id: "v1", member_email: "v@x.com", member_name: "V", member_phone: "+15550000001", alert_level: "informational", care_role: "viewer" },
+    { id: "c1", member_email: "c@x.com", member_name: "C", member_phone: "+15550000002", alert_level: "informational", care_role: "caregiver" },
+  ]);
+  const res = await POST(signedReq({ patient_id: "p1", vitals: { bp_systolic: 200 } }));
+  const { status, body } = await readJson(res);
+  assert.equal(status, 200);
+  const ids = (body.sms_delivery as Array<{ member_id: string }>).map((s) => s.member_id);
+  assert.deepEqual(ids, ["c1"]);
+});

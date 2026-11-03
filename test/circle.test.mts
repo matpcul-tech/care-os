@@ -133,7 +133,7 @@ test("SECURITY: a caregiver cannot add a circle member", async () => {
   assert.equal(stub.calls.some((c) => c.url.includes("api.resend.com")), false);
 });
 
-test("an admin who is not the patient can add a circle member", async () => {
+test("a member who is not the patient cannot add a circle member (care_circle has no role column)", async () => {
   stub.reset();
   stub.on("/auth/v1/user", () => ({ json: { id: "admin-1" } }));
   stub.on("/rest/v1/care_circle", (c) => {
@@ -157,9 +157,9 @@ test("an admin who is not the patient can add a circle member", async () => {
       }),
     }),
   );
-  const { status, body } = await readJson(res);
-  assert.equal(status, 200);
-  assert.equal(body.member.member_email, "sis@x.com");
+  const { status } = await readJson(res);
+  assert.equal(status, 403);
+  assert.ok(!stub.calls.some((c) => c.method === "POST" && c.url.includes("/rest/v1/care_circle")), "no insert");
 });
 
 test("authorized POST adds a member and sends the invite email", async () => {
@@ -222,13 +222,13 @@ test("POST rejects an invalid care_role", async () => {
   assert.match(body.error, /care_role/);
 });
 
-test("authorized POST persists the chosen care_role", async () => {
+test("authorized POST writes only real care_circle columns", async () => {
   stub.reset();
   stub.on("/auth/v1/user", () => ({ json: { id: "patient-1" } }));
   let insertedRole: string | undefined;
   stub.on("/rest/v1/care_circle", (c) => {
     if (c.method === "POST") {
-      insertedRole = JSON.parse(c.body || "[]")[0]?.care_role;
+      insertedRole = Object.keys(JSON.parse(c.body || "[]")[0] || {}).sort().join(",");
       return { json: [{ id: "new", ...JSON.parse(c.body || "[]")[0] }] };
     }
     return undefined;
@@ -243,5 +243,51 @@ test("authorized POST persists the chosen care_role", async () => {
   );
   const { status } = await readJson(res);
   assert.equal(status, 200);
-  assert.equal(insertedRole, "viewer");
+  assert.equal(insertedRole, "alert_level,care_role,member_email,member_name,patient_id,relationship");
+});
+
+async function addAs(callerRow: Record<string, unknown> | null, grant: string) {
+  stub.reset();
+  stub.on("/auth/v1/user", () => ({ json: { id: "member-1" } }));
+  let inserted: Record<string, unknown> | undefined;
+  stub.on("/rest/v1/care_circle", (c) => {
+    if (c.method === "POST") {
+      inserted = JSON.parse(c.body || "[]")[0];
+      return { json: [{ id: "new", ...inserted }] };
+    }
+    if (c.url.includes("member_user_id=eq.member-1")) return { json: callerRow ? [callerRow] : [] };
+    return undefined;
+  });
+  stub.on("api.resend.com", () => ({ json: { id: "e" } }));
+  const res = await POST(
+    makeReq("https://care/api/circle", {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({ patient_id: "patient-1", member_email: "n@x.com", member_name: "N", relationship: "Friend", alert_level: "informational", care_role: grant }),
+    }),
+  );
+  const { status } = await readJson(res);
+  return { status, inserted };
+}
+
+test("an admin member can add a member and grant admin", async () => {
+  const { status, inserted } = await addAs({ id: "cc", care_role: "admin" }, "admin");
+  assert.equal(status, 200);
+  assert.equal(inserted?.care_role, "admin");
+});
+
+test("a caregiver member cannot add members", async () => {
+  const { status, inserted } = await addAs({ id: "cc", care_role: "caregiver" }, "viewer");
+  assert.equal(status, 403);
+  assert.equal(inserted, undefined);
+});
+
+test("a viewer member cannot add members", async () => {
+  const { status } = await addAs({ id: "cc", care_role: "viewer" }, "viewer");
+  assert.equal(status, 403);
+});
+
+test("a member with no role column value is treated as caregiver (cannot grant)", async () => {
+  const { status } = await addAs({ id: "cc" }, "viewer");
+  assert.equal(status, 403);
 });

@@ -30,6 +30,8 @@ interface RedeemBody {
   alert_level?: string;
   care_role?: string;
   role?: string;
+  // True when the member already has an account and is signing in with it.
+  existing_account?: boolean;
 }
 
 interface InviteRow {
@@ -277,8 +279,15 @@ export async function POST(req: NextRequest) {
     if (!code) return bad('code required');
     if (!isEmail(email)) return bad('valid email required');
     if (!member_name) return bad('member_name required');
-    const pw = validatePassword(password, { email, name: member_name });
-    if (!pw.ok) return bad(pw.reason || 'password does not meet requirements');
+    const existingAccount = body.existing_account === true;
+    // The new-password policy applies only to accounts created here. An
+    // existing account is verified by signing in with its current password.
+    if (existingAccount) {
+      if (!password) return bad('password required');
+    } else {
+      const pw = validatePassword(password, { email, name: member_name });
+      if (!pw.ok) return bad(pw.reason || 'password does not meet requirements');
+    }
 
     const { invite, status, bodyText } = await lookupInvite(code);
     if (status !== 200) {
@@ -306,10 +315,13 @@ export async function POST(req: NextRequest) {
       return bad('alert_level must be "critical" or "informational"');
     }
 
-    // Resolve the member's access role. The invite's suggested_role (set by
-    // the patient) is authoritative; a client-supplied role may only NARROW
-    // it, never escalate — so a viewer invite can't be redeemed as an admin.
-    const suggestedRole: CareRole = invite.suggested_role || 'caregiver';
+    // The invite's suggested_role (set by the patient or an admin) is
+    // authoritative. A client-supplied role may only narrow it, never raise
+    // it, so a viewer invite cannot be redeemed as an admin.
+    const suggestedRole: CareRole =
+      invite.suggested_role && CARE_ROLES.includes(invite.suggested_role)
+        ? invite.suggested_role
+        : 'caregiver';
     const requestedRole = (body.care_role || body.role || '').trim() as CareRole;
     const RANK: Record<CareRole, number> = { viewer: 0, caregiver: 1, admin: 2 };
     let finalRole: CareRole = suggestedRole;
@@ -320,7 +332,7 @@ export async function POST(req: NextRequest) {
     // Atomically claim the invite BEFORE creating any account. inviteUsable()
     // above is only an early, friendly-error check; this conditional UPDATE
     // is the authority on single-use. If we lose the race (or the code was
-    // already redeemed), stop here — no user is created.
+    // already redeemed), stop here, no user is created.
     const claimedAt = new Date().toISOString();
     const claim = await claimInvite(invite.id, claimedAt);
     if (claim === 'error') {
@@ -330,7 +342,9 @@ export async function POST(req: NextRequest) {
       return bad('invite has already been redeemed', 410);
     }
 
-    const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
+    const createRes = existingAccount
+      ? new Response('User already registered', { status: 422 })
+      : await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -345,29 +359,55 @@ export async function POST(req: NextRequest) {
       }),
     });
 
+    // An existing account (for example a CareIQ user) may also accept an
+    // invite. The password must match that account, which proves ownership
+    // before we link it to the circle. A new account is created otherwise.
+    let memberUserId: string;
+    let memberEmail: string;
+    let createdUser = false;
     if (!createRes.ok) {
       const txt = await createRes.text();
-      // The redemption did not consume the invite — release our claim so the
-      // code can be retried (e.g. with a different email).
-      await releaseInvite(invite.id);
-      if (
+      const duplicate =
         createRes.status === 422 ||
         txt.includes('already been registered') ||
         txt.includes('already exists') ||
-        txt.includes('User already registered')
-      ) {
-        return bad('an account with this email already exists', 409);
+        txt.includes('User already registered');
+      if (!duplicate) {
+        await releaseInvite(invite.id);
+        console.error('[redeem POST] auth create', createRes.status, txt.slice(0, 240));
+        return bad('auth create failed', 500, {
+          supabase_status: createRes.status,
+          supabase_body: txt.slice(0, 240),
+        });
       }
-      console.error('[redeem POST] auth create', createRes.status, txt.slice(0, 240));
-      return bad('auth create failed', 500, {
-        supabase_status: createRes.status,
-        supabase_body: txt.slice(0, 240),
+      const signIn = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: ANON_KEY },
+        body: JSON.stringify({ email, password }),
       });
+      const existing = signIn.ok
+        ? ((await signIn.json().catch(() => null)) as { user?: { id?: string; email?: string } } | null)
+        : null;
+      if (!existing?.user?.id) {
+        // Wrong password for the existing account: do not consume the invite.
+        await releaseInvite(invite.id);
+        return bad(
+          'an account with this email already exists. Enter your existing password to join this Care Circle.',
+          409,
+          { existing_account: true },
+        );
+      }
+      memberUserId = existing.user.id;
+      memberEmail = existing.user.email || email;
+    } else {
+      const newUser = (await createRes.json()) as { id: string; email: string };
+      memberUserId = newUser.id;
+      memberEmail = newUser.email;
+      createdUser = true;
     }
-    const newUser = (await createRes.json()) as { id: string; email: string };
 
-    // Insert care_circle row. patient_name is denormalized so /login can
-    // restore it without re-querying care_circle_invites or auth.users.
+    // Insert care_circle row using CareIQ's columns. The display name goes in
+    // patient_nickname (care_circle has no patient_name column).
     const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/care_circle`, {
       method: 'POST',
       headers: {
@@ -379,8 +419,8 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify([
         {
           patient_id: invite.patient_id,
-          patient_name: patientName,
-          member_user_id: newUser.id,
+          patient_nickname: patientName,
+          member_user_id: memberUserId,
           member_email: email,
           member_name,
           member_phone,
@@ -394,10 +434,13 @@ export async function POST(req: NextRequest) {
 
     if (!insertRes.ok) {
       const txt = await insertRes.text();
-      await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${newUser.id}`, {
-        method: 'DELETE',
-        headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
-      });
+      // Only delete an account this request created, never an existing one.
+      if (createdUser) {
+        await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${memberUserId}`, {
+          method: 'DELETE',
+          headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
+        });
+      }
       // Roll back the claim too so the invite is reusable after this failure.
       await releaseInvite(invite.id);
       console.error('[redeem POST] circle insert', insertRes.status, txt.slice(0, 240));
@@ -427,7 +470,7 @@ export async function POST(req: NextRequest) {
     }
 
     // used_at was already set atomically at claim time; just record who
-    // redeemed it. Best-effort — the invite is already consumed either way.
+    // redeemed it. Best-effort, the invite is already consumed either way.
     await fetch(
       `${SUPABASE_URL}/rest/v1/care_circle_invites?id=eq.${invite.id}`,
       {
@@ -437,7 +480,7 @@ export async function POST(req: NextRequest) {
           apikey: SERVICE_ROLE,
           Authorization: `Bearer ${SERVICE_ROLE}`,
         },
-        body: JSON.stringify({ used_by: newUser.id }),
+        body: JSON.stringify({ used_by: memberUserId }),
       },
     ).catch(() => {});
 
@@ -454,7 +497,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         ok: true,
-        user: { id: newUser.id, email: newUser.email },
+        user: { id: memberUserId, email: memberEmail },
         circle: circleRow,
         patient: { id: invite.patient_id, name: patientName },
         session,

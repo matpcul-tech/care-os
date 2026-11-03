@@ -212,55 +212,83 @@ test("POST rolls back the auth user if the circle insert fails", async () => {
   assert.ok(released, "a failed redemption must release its invite claim");
 });
 
-// Helper: run a full happy-path redeem and return the care_role written to
-// the care_circle insert. `inviteOverrides` and `body` tune the invite's
-// suggested_role and the client-requested role.
-async function redeemAndCaptureRole(
-  inviteOverrides: Record<string, unknown>,
+// Helper: run a full happy-path redeem and return the care_circle insert body.
+async function redeemAndCaptureInsert(
   bodyExtra: Record<string, unknown>,
-): Promise<string | undefined> {
+  existing = false,
+  inviteOverrides: Record<string, unknown> = {},
+): Promise<{ row: Record<string, unknown> | undefined; status: number; deleted: boolean }> {
   stub.reset();
-  let insertedRole: string | undefined;
+  let row: Record<string, unknown> | undefined;
+  let deleted = false;
   stub
     .on("care_circle_invites?code", () => ({ json: [inviteRow(inviteOverrides)] }))
     .on("care_circle_invites?id", () => ({ json: [{ id: "inv1" }] }))
-    .on("/auth/v1/admin/users", (c) => (c.method === "POST" ? { json: { id: "new-user", email: "f@x.com" } } : undefined))
+    .on("/auth/v1/admin/users", (c) => {
+      if (c.method === "DELETE") { deleted = true; return { json: {} }; }
+      if (c.method !== "POST") return undefined;
+      return existing ? { status: 422, text: "User already registered" } : { json: { id: "new-user", email: "f@x.com" } };
+    })
     .on("/rest/v1/care_circle", (c) => {
       if (c.method === "POST") {
-        insertedRole = JSON.parse(c.body || "[]")[0]?.care_role;
+        row = JSON.parse(c.body || "[]")[0];
         return { json: [{ id: "cc1", patient_id: "patient-1" }] };
       }
       return undefined;
     })
-    .on("/auth/v1/token", () => ({ json: { access_token: "at", refresh_token: "rt", expires_at: 999 } }));
+    .on("/auth/v1/token", () => ({ json: { access_token: "at", refresh_token: "rt", expires_at: 999, user: { id: "existing-user", email: "f@x.com" } } }));
   const res = await POST(
     makeReq("https://care/api/circle/redeem", {
       method: "POST",
       body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "Str0ng-Passphrase!", member_name: "Fam", ...bodyExtra }),
     }),
   );
-  await readJson(res);
-  return insertedRole;
+  const { status } = await readJson(res);
+  return { row, status, deleted };
 }
 
+test("redeem writes only real CareIQ care_circle columns", async () => {
+  const { row, status } = await redeemAndCaptureInsert({ role: "admin" });
+  assert.equal(status, 200);
+  assert.ok(row);
+  assert.equal(row!.member_user_id, "new-user");
+  assert.equal(row!.patient_nickname, "Mary");
+  const allowed = new Set(["patient_id", "member_email", "member_name", "relationship", "alert_level",
+    "member_user_id", "member_phone", "invite_id", "patient_nickname", "care_role"]);
+  for (const k of Object.keys(row!)) assert.ok(allowed.has(k), `unexpected column ${k}`);
+});
+
 test("redeem assigns the invite's suggested_role", async () => {
-  const role = await redeemAndCaptureRole({ suggested_role: "viewer" }, {});
-  assert.equal(role, "viewer");
+  const { row } = await redeemAndCaptureInsert({}, false, { suggested_role: "viewer" });
+  assert.equal(row!.care_role, "viewer");
 });
 
 test("redeem defaults to caregiver when the invite suggests no role", async () => {
-  const role = await redeemAndCaptureRole({}, {});
-  assert.equal(role, "caregiver");
+  const { row } = await redeemAndCaptureInsert({});
+  assert.equal(row!.care_role, "caregiver");
 });
 
 test("SECURITY: client CANNOT escalate above the invite's suggested_role", async () => {
-  const role = await redeemAndCaptureRole({ suggested_role: "viewer" }, { role: "admin" });
-  assert.equal(role, "viewer", "a viewer invite must not be redeemable as admin");
+  const { row } = await redeemAndCaptureInsert({ role: "admin" }, false, { suggested_role: "viewer" });
+  assert.equal(row!.care_role, "viewer");
 });
 
 test("client MAY narrow below the suggested role", async () => {
-  const role = await redeemAndCaptureRole({ suggested_role: "admin" }, { role: "viewer" });
-  assert.equal(role, "viewer");
+  const { row } = await redeemAndCaptureInsert({ role: "viewer" }, false, { suggested_role: "admin" });
+  assert.equal(row!.care_role, "viewer");
+});
+
+test("an existing account can accept an invite by signing in", async () => {
+  const { row, status, deleted } = await redeemAndCaptureInsert({ existing_account: true, password: "old-pw" }, true);
+  assert.equal(status, 200);
+  assert.equal(row!.member_user_id, "existing-user");
+  assert.equal(deleted, false, "an existing account must never be deleted");
+});
+
+test("duplicate email with matching password links the existing account", async () => {
+  const { row, status } = await redeemAndCaptureInsert({}, true);
+  assert.equal(status, 200);
+  assert.equal(row!.member_user_id, "existing-user");
 });
 
 test("POST maps duplicate-email auth error to 409", async () => {
@@ -270,6 +298,7 @@ test("POST maps duplicate-email auth error to 409", async () => {
     .on("/auth/v1/admin/users", (c) =>
       c.method === "POST" ? { status: 422, text: "User already registered" } : undefined,
     )
+    .on("/auth/v1/token", () => ({ status: 400, json: { error: "invalid_grant" } }))
     .on("care_circle_invites?id", () => ({ json: [{ id: "inv1" }] }));
   const res = await POST(
     makeReq("https://care/api/circle/redeem", {
