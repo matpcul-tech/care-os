@@ -284,7 +284,7 @@ function SignupInner() {
             </span>
             <input style={input} type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
 
-            <span style={label}>Phone (for emergency SMS — optional)</span>
+            <span style={label}>Phone (for emergency SMS, optional)</span>
             <input style={input} type="tel" placeholder="+1 555 555 0123" value={phone} onChange={(e) => setPhone(e.target.value)} />
 
             <span style={label}>Relationship to {invite.patient_name || 'patient'}</span>
@@ -349,7 +349,7 @@ function SignupInner() {
             </button>
 
             <p style={{ marginTop: 14, fontSize: 11, color: '#7a9bbf', lineHeight: 1.6 }}>
-              By joining, you&apos;ll receive {alertLevel === 'critical' ? 'critical-only' : 'all'} health alerts about {invite.patient_name || 'your loved one'}. Alerts name which metric crossed a threshold and what to do — not raw lab values. Sign in for full details.
+              By joining, you&apos;ll receive {alertLevel === 'critical' ? 'critical-only' : 'all'} health alerts about {invite.patient_name || 'your loved one'}. Alerts name which metric crossed a threshold and what to do, not raw lab values. Sign in for full details.
             </p>
           </div>
         )}

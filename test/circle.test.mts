@@ -243,5 +243,51 @@ test("authorized POST writes only real care_circle columns", async () => {
   );
   const { status } = await readJson(res);
   assert.equal(status, 200);
-  assert.equal(insertedRole, "alert_level,member_email,member_name,patient_id,relationship");
+  assert.equal(insertedRole, "alert_level,care_role,member_email,member_name,patient_id,relationship");
+});
+
+async function addAs(callerRow: Record<string, unknown> | null, grant: string) {
+  stub.reset();
+  stub.on("/auth/v1/user", () => ({ json: { id: "member-1" } }));
+  let inserted: Record<string, unknown> | undefined;
+  stub.on("/rest/v1/care_circle", (c) => {
+    if (c.method === "POST") {
+      inserted = JSON.parse(c.body || "[]")[0];
+      return { json: [{ id: "new", ...inserted }] };
+    }
+    if (c.url.includes("member_user_id=eq.member-1")) return { json: callerRow ? [callerRow] : [] };
+    return undefined;
+  });
+  stub.on("api.resend.com", () => ({ json: { id: "e" } }));
+  const res = await POST(
+    makeReq("https://care/api/circle", {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({ patient_id: "patient-1", member_email: "n@x.com", member_name: "N", relationship: "Friend", alert_level: "informational", care_role: grant }),
+    }),
+  );
+  const { status } = await readJson(res);
+  return { status, inserted };
+}
+
+test("an admin member can add a member and grant admin", async () => {
+  const { status, inserted } = await addAs({ id: "cc", care_role: "admin" }, "admin");
+  assert.equal(status, 200);
+  assert.equal(inserted?.care_role, "admin");
+});
+
+test("a caregiver member cannot add members", async () => {
+  const { status, inserted } = await addAs({ id: "cc", care_role: "caregiver" }, "viewer");
+  assert.equal(status, 403);
+  assert.equal(inserted, undefined);
+});
+
+test("a viewer member cannot add members", async () => {
+  const { status } = await addAs({ id: "cc", care_role: "viewer" }, "viewer");
+  assert.equal(status, 403);
+});
+
+test("a member with no role column value is treated as caregiver (cannot grant)", async () => {
+  const { status } = await addAs({ id: "cc" }, "viewer");
+  assert.equal(status, 403);
 });

@@ -58,8 +58,9 @@ export async function authVault(req: NextRequest): Promise<VaultAuthResult> {
   if (!ccRes.ok) {
     return { ok: false, status: 500, message: "care_circle lookup failed" };
   }
-  // select=* because CareIQ's care_circle layout has no care_role column;
-  // a missing role falls back to caregiver below.
+  // care_role comes from care_circle (migration 20261103000001). select=*
+  // keeps this working if the column is absent; a missing role falls back
+  // to caregiver below.
   const rows = (await ccRes.json()) as Array<{ patient_id: string; care_role?: string }>;
   if (rows.length === 0) {
     return { ok: false, status: 403, message: "no care circle membership" };

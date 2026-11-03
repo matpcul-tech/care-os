@@ -216,12 +216,13 @@ test("POST rolls back the auth user if the circle insert fails", async () => {
 async function redeemAndCaptureInsert(
   bodyExtra: Record<string, unknown>,
   existing = false,
+  inviteOverrides: Record<string, unknown> = {},
 ): Promise<{ row: Record<string, unknown> | undefined; status: number; deleted: boolean }> {
   stub.reset();
   let row: Record<string, unknown> | undefined;
   let deleted = false;
   stub
-    .on("care_circle_invites?code", () => ({ json: [inviteRow()] }))
+    .on("care_circle_invites?code", () => ({ json: [inviteRow(inviteOverrides)] }))
     .on("care_circle_invites?id", () => ({ json: [{ id: "inv1" }] }))
     .on("/auth/v1/admin/users", (c) => {
       if (c.method === "DELETE") { deleted = true; return { json: {} }; }
@@ -253,8 +254,28 @@ test("redeem writes only real CareIQ care_circle columns", async () => {
   assert.equal(row!.member_user_id, "new-user");
   assert.equal(row!.patient_nickname, "Mary");
   const allowed = new Set(["patient_id", "member_email", "member_name", "relationship", "alert_level",
-    "member_user_id", "member_phone", "invite_id", "patient_nickname"]);
+    "member_user_id", "member_phone", "invite_id", "patient_nickname", "care_role"]);
   for (const k of Object.keys(row!)) assert.ok(allowed.has(k), `unexpected column ${k}`);
+});
+
+test("redeem assigns the invite's suggested_role", async () => {
+  const { row } = await redeemAndCaptureInsert({}, false, { suggested_role: "viewer" });
+  assert.equal(row!.care_role, "viewer");
+});
+
+test("redeem defaults to caregiver when the invite suggests no role", async () => {
+  const { row } = await redeemAndCaptureInsert({});
+  assert.equal(row!.care_role, "caregiver");
+});
+
+test("SECURITY: client CANNOT escalate above the invite's suggested_role", async () => {
+  const { row } = await redeemAndCaptureInsert({ role: "admin" }, false, { suggested_role: "viewer" });
+  assert.equal(row!.care_role, "viewer");
+});
+
+test("client MAY narrow below the suggested role", async () => {
+  const { row } = await redeemAndCaptureInsert({ role: "viewer" }, false, { suggested_role: "admin" });
+  assert.equal(row!.care_role, "viewer");
 });
 
 test("an existing account can accept an invite by signing in", async () => {

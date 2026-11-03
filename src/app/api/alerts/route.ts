@@ -48,6 +48,7 @@ interface CircleMember {
   member_email: string;
   member_name: string;
   member_phone: string | null;
+  care_role?: string | null;
   alert_level: Severity;
 }
 
@@ -234,7 +235,7 @@ async function sendAlertEmail(args: {
   <ul style="padding-left:18px;margin:12px 0">${items}</ul>
   <p style="font-size:12px;color:#666;margin-top:24px;padding-top:12px;border-top:1px solid #eee">
     Patient reference: <code>${args.patientId}</code><br>
-    This alert names the metric and guidance only — no raw lab values. Sign in to CareCircle for full context.
+    This alert names the metric and guidance only, no raw lab values. Sign in to CareCircle for full context.
   </p>
 </div>`.trim();
 
@@ -350,7 +351,7 @@ export async function POST(req: NextRequest) {
 
     // ----- Authenticate EVERY alert request via the CareIQ HMAC signature.
     // Alerts fan out real emails and SMS to a patient's care circle, so every
-    // path (vitals thresholds and panel-grade changes alike) must be signed —
+    // path (vitals thresholds and panel-grade changes alike) must be signed , 
     // not just grade changes. The signature covers the exact raw body, so it
     // also authenticates patient_id and vitals against tampering/replay.
     if (!CAREIQ_ALERT_SIGNING_KEY) {
@@ -402,7 +403,7 @@ export async function POST(req: NextRequest) {
 
     const r = await sb(
       'GET',
-      `care_circle?patient_id=eq.${encodeURIComponent(patientId)}&select=id,member_email,member_name,member_phone,alert_level`,
+      `care_circle?patient_id=eq.${encodeURIComponent(patientId)}&select=*`,
     );
     if (!r.ok) return bad(`Supabase ${r.status}: ${await r.text()}`, 500);
     const allMembers = (await r.json()) as CircleMember[];
@@ -439,7 +440,10 @@ export async function POST(req: NextRequest) {
       const smsBody = buildSmsBody(patientRef, criticalFlags);
       const phoneMembers = allMembers.filter(
         (m): m is CircleMember & { member_phone: string } =>
-          typeof m.member_phone === 'string' && m.member_phone.length > 0,
+          typeof m.member_phone === 'string' &&
+          m.member_phone.length > 0 &&
+          // Viewers are read-only and get no alert SMS.
+          m.care_role !== 'viewer',
       );
       smsDelivery = await Promise.all(
         phoneMembers.map(async (m) => {

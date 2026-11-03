@@ -17,6 +17,9 @@ const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const ALERT_LEVELS = ['critical', 'informational'] as const;
 type AlertLevel = (typeof ALERT_LEVELS)[number];
 
+const CARE_ROLES = ['admin', 'caregiver', 'viewer'] as const;
+type CareRole = (typeof CARE_ROLES)[number];
+
 interface RedeemBody {
   code?: string;
   email?: string;
@@ -25,6 +28,8 @@ interface RedeemBody {
   member_phone?: string;
   relationship?: string;
   alert_level?: string;
+  care_role?: string;
+  role?: string;
   // True when the member already has an account and is signing in with it.
   existing_account?: boolean;
 }
@@ -36,6 +41,7 @@ interface InviteRow {
   patient_name: string | null;
   suggested_relationship: string | null;
   suggested_alert_level: AlertLevel | null;
+  suggested_role: CareRole | null;
   expires_at: string;
   used_at: string | null;
   revoked_at: string | null;
@@ -309,10 +315,24 @@ export async function POST(req: NextRequest) {
       return bad('alert_level must be "critical" or "informational"');
     }
 
+    // The invite's suggested_role (set by the patient or an admin) is
+    // authoritative. A client-supplied role may only narrow it, never raise
+    // it, so a viewer invite cannot be redeemed as an admin.
+    const suggestedRole: CareRole =
+      invite.suggested_role && CARE_ROLES.includes(invite.suggested_role)
+        ? invite.suggested_role
+        : 'caregiver';
+    const requestedRole = (body.care_role || body.role || '').trim() as CareRole;
+    const RANK: Record<CareRole, number> = { viewer: 0, caregiver: 1, admin: 2 };
+    let finalRole: CareRole = suggestedRole;
+    if (CARE_ROLES.includes(requestedRole) && RANK[requestedRole] < RANK[suggestedRole]) {
+      finalRole = requestedRole;
+    }
+
     // Atomically claim the invite BEFORE creating any account. inviteUsable()
     // above is only an early, friendly-error check; this conditional UPDATE
     // is the authority on single-use. If we lose the race (or the code was
-    // already redeemed), stop here — no user is created.
+    // already redeemed), stop here, no user is created.
     const claimedAt = new Date().toISOString();
     const claim = await claimInvite(invite.id, claimedAt);
     if (claim === 'error') {
@@ -406,6 +426,7 @@ export async function POST(req: NextRequest) {
           member_phone,
           relationship: finalRelationship,
           alert_level: finalAlertLevel,
+          care_role: finalRole,
           invite_id: invite.id,
         },
       ]),
@@ -449,7 +470,7 @@ export async function POST(req: NextRequest) {
     }
 
     // used_at was already set atomically at claim time; just record who
-    // redeemed it. Best-effort — the invite is already consumed either way.
+    // redeemed it. Best-effort, the invite is already consumed either way.
     await fetch(
       `${SUPABASE_URL}/rest/v1/care_circle_invites?id=eq.${invite.id}`,
       {
