@@ -308,10 +308,74 @@ test("POST maps duplicate-email auth error to 409", async () => {
   );
   const { status, body } = await readJson(res);
   assert.equal(status, 409);
-  assert.match(body.error, /already exists/);
+  assert.match(body.error, /already have an account/);
   // A duplicate-email failure must also release the claim (didn't consume it).
   const released = stub.calls.some(
     (c) => c.method === "PATCH" && c.url.includes("care_circle_invites?id") && (c.body || "").includes('"used_at":null'),
   );
   assert.ok(released, "duplicate-email redemption must release its invite claim");
+});
+
+test("existing_account with a wrong password returns 401 with a clear message and keeps the invite", async () => {
+  stub.reset();
+  stub
+    .on("care_circle_invites?code", () => ({ json: [inviteRow()] }))
+    .on("/auth/v1/token", () => ({ status: 400, json: { error: "invalid_grant" } }))
+    .on("care_circle_invites?id", () => ({ json: [{ id: "inv1" }] }));
+  const res = await POST(
+    makeReq("https://care/api/circle/redeem", {
+      method: "POST",
+      body: JSON.stringify({ code: "ABCDEFGH", email: "f@x.com", password: "wrong", member_name: "Fam", existing_account: true }),
+    }),
+  );
+  const { status, body } = await readJson(res);
+  assert.equal(status, 401);
+  assert.equal(body.debug.existing_account, true);
+  assert.match(body.error, /does not match/);
+  assert.doesNotMatch(body.error, /[\u2013\u2014]/);
+  assert.ok(stub.calls.some((c) => c.method === "PATCH" && (c.body || "").includes('"used_at":null')));
+});
+
+test("signed-in caller (Bearer token) redeems a code without email or password", async () => {
+  stub.reset();
+  let row: Record<string, unknown> | undefined;
+  stub
+    .on("/auth/v1/user", () => ({ json: { id: "signed-in-user", email: "Matt@X.com", user_metadata: { full_name: "Matt" } } }))
+    .on("care_circle_invites?code", () => ({ json: [inviteRow()] }))
+    .on("care_circle_invites?id", () => ({ json: [{ id: "inv1" }] }))
+    .on("/rest/v1/care_circle", (c) => {
+      if (c.method === "POST") { row = JSON.parse(c.body || "[]")[0]; return { json: [{ id: "cc1", patient_id: "patient-1" }] }; }
+      return undefined;
+    });
+  const res = await POST(
+    makeReq("https://care/api/circle/redeem", {
+      method: "POST",
+      headers: { authorization: "Bearer good-token" },
+      body: JSON.stringify({ code: "abcdefgh" }),
+    }),
+  );
+  const { status, body } = await readJson(res);
+  assert.equal(status, 200);
+  assert.equal(body.patient.id, "patient-1");
+  assert.equal(row!.member_user_id, "signed-in-user");
+  assert.equal(row!.member_email, "matt@x.com");
+  assert.equal(row!.member_name, "Matt");
+  assert.equal(stub.calls.some((c) => c.url.includes("/auth/v1/admin/users") && c.method === "POST"), false, "no account is created");
+  assert.equal(stub.calls.some((c) => c.url.includes("/auth/v1/token")), false, "no password sign-in");
+  assert.equal(stub.calls.some((c) => c.method === "DELETE"), false);
+});
+
+test("signed-in redeem with an invalid token returns 401 and does not claim the invite", async () => {
+  stub.reset();
+  stub.on("/auth/v1/user", () => ({ status: 401, json: {} }));
+  const res = await POST(
+    makeReq("https://care/api/circle/redeem", {
+      method: "POST",
+      headers: { authorization: "Bearer bad" },
+      body: JSON.stringify({ code: "ABCDEFGH" }),
+    }),
+  );
+  const { status } = await readJson(res);
+  assert.equal(status, 401);
+  assert.equal(stub.calls.some((c) => c.url.includes("care_circle_invites")), false);
 });

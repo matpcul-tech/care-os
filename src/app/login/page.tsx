@@ -110,6 +110,20 @@ export default function LoginPage() {
   // token and switch to a code prompt.
   const [mfaToken, setMfaToken] = useState<string | null>(null);
   const [code, setCode] = useState('');
+  // Signed in but no circle yet: hold the session so an invite code can be
+  // redeemed for this account without retyping the password.
+  const [pendingSession, setPendingSession] = useState<
+    { access_token: string; refresh_token: string; expires_at: number; user_id: string } | null
+  >(null);
+  const [inviteCode, setInviteCode] = useState('');
+  const [redeeming, setRedeeming] = useState(false);
+
+  // Carry ?code=XXXX from the invite page so the code is not lost.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const c = new URLSearchParams(window.location.search).get('code');
+    if (c) setInviteCode(c.trim().toUpperCase());
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,9 +159,10 @@ export default function LoginPage() {
       circle: CareCircleRow | null,
     ) => {
       if (!circle) {
+        setPendingSession(s);
         setError(
-          'You are signed in, but no Care Circle is linked to this email. ' +
-            'Ask the patient to send you an invite link, then open that link to join.',
+          'You are signed in, but no Care Circle is linked to this email yet. ' +
+            'If you have an invite code, enter it below to join.',
         );
         return;
       }
@@ -201,6 +216,37 @@ export default function LoginPage() {
       setSubmitting(false);
     }
   }, [email, password, submitting, finalizeLogin]);
+
+  const redeemInvite = useCallback(async () => {
+    if (redeeming || !pendingSession) return;
+    const c = inviteCode.trim().toUpperCase();
+    if (!c) {
+      setError('Enter the invite code from your invite link.');
+      return;
+    }
+    setRedeeming(true);
+    setError(null);
+    try {
+      const r = await fetch('/api/circle/redeem', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${pendingSession.access_token}`,
+        },
+        body: JSON.stringify({ code: c }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.patient?.id) {
+        setError(d.error || 'That invite code did not work. Check it and try again.');
+        return;
+      }
+      finalizeLogin(pendingSession, { patient_id: d.patient.id, patient_name: d.patient.name ?? null });
+    } catch {
+      setError('Network error. Please try again.');
+    } finally {
+      setRedeeming(false);
+    }
+  }, [redeeming, pendingSession, inviteCode, finalizeLogin]);
 
   const verifyMfa = useCallback(async () => {
     if (submitting || !mfaToken) return;
@@ -385,6 +431,27 @@ export default function LoginPage() {
             </div>
           )}
 
+          {pendingSession && (
+            <div data-testid="invite-code-panel" style={{ marginBottom: 14 }}>
+              <span style={label}>Have an invite code? Enter it here</span>
+              <input
+                style={{ ...input, fontFamily: T, letterSpacing: '.2em', textTransform: 'uppercase' }}
+                autoCapitalize="characters"
+                placeholder="ABCD2345"
+                value={inviteCode}
+                onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                onKeyDown={(e) => { if (e.key === 'Enter') redeemInvite(); }}
+              />
+              <button
+                onClick={redeemInvite}
+                disabled={redeeming}
+                style={{ width: '100%', padding: '12px 0', borderRadius: 12, border: '1px solid #00d4b8', background: 'transparent', color: '#00d4b8', fontSize: 13, fontWeight: 700, fontFamily: O, cursor: redeeming ? 'not-allowed' : 'pointer', opacity: redeeming ? 0.6 : 1 }}
+              >
+                {redeeming ? 'Joining...' : 'Join this Care Circle'}
+              </button>
+            </div>
+          )}
+
           <button
             onClick={mfaToken ? verifyMfa : submit}
             disabled={submitting}
@@ -419,7 +486,7 @@ export default function LoginPage() {
             <p style={{ marginTop: 18, fontSize: 11, color: '#7a9bbf', textAlign: 'center', lineHeight: 1.6 }}>
               New here?{' '}
               <Link
-                href="/signup"
+                href={inviteCode ? `/signup?code=${encodeURIComponent(inviteCode)}` : '/signup'}
                 style={{ color: '#00d4b8', textDecoration: 'underline', textUnderlineOffset: 3 }}
               >
                 Use your invite code to sign up

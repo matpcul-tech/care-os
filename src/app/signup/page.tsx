@@ -145,6 +145,9 @@ function SignupInner() {
       });
       const d = await r.json();
       if (!r.ok) {
+        // Existing account: switch to the inline "join with your existing
+        // password" path on this page instead of sending the user to /login,
+        // which would drop the invite code.
         if (d.debug?.existing_account) setHasAccount(true);
         throw new Error(d.error || 'signup failed');
       }
@@ -279,6 +282,18 @@ function SignupInner() {
               <span>I already have a CareCircle or CareIQ account</span>
             </label>
 
+            {hasAccount && (
+              <div
+                data-testid="existing-account-panel"
+                style={{ margin: '6px 0 12px', padding: '10px 12px', borderRadius: 10, fontSize: 12, lineHeight: 1.6, background: 'rgba(0,212,184,.08)', border: '1px solid rgba(0,212,184,.3)', color: '#cfeee8' }}
+              >
+                <strong>Join with your existing password.</strong> Enter the password you already use for CareCircle or CareIQ and tap the button below. You stay on this page and join this Care Circle with that account.{' '}
+                <Link href="/reset" style={{ color: '#00d4b8', textDecoration: 'underline', textUnderlineOffset: 3 }}>
+                  Forgot password?
+                </Link>
+              </div>
+            )}
+
             <span style={label}>
               {hasAccount ? 'Your existing password' : 'Password (12+ chars, mix of letters/numbers/symbols)'}
             </span>
@@ -345,7 +360,11 @@ function SignupInner() {
                 boxShadow: '0 0 20px rgba(0,212,184,.3)',
               }}
             >
-              {submitting ? 'Creating account…' : 'Join the Care Circle'}
+              {submitting
+                ? (hasAccount ? 'Joining…' : 'Creating account…')
+                : hasAccount
+                  ? 'Join with your existing password'
+                  : 'Join the Care Circle'}
             </button>
 
             <p style={{ marginTop: 14, fontSize: 11, color: '#7a9bbf', lineHeight: 1.6 }}>
@@ -358,7 +377,7 @@ function SignupInner() {
         <p style={{ marginTop: 18, fontSize: 11, color: '#7a9bbf', textAlign: 'center', lineHeight: 1.6 }}>
           Already have an account?{' '}
           <Link
-            href="/login"
+            href={code.trim() ? `/login?code=${encodeURIComponent(code.trim().toUpperCase())}` : '/login'}
             style={{ color: '#00d4b8', textDecoration: 'underline', textUnderlineOffset: 3 }}
           >
             Log in

@@ -165,6 +165,29 @@ async function releaseInvite(inviteId: string): Promise<void> {
 // metadata is empty too. Anything we resolve here is also written into
 // care_circle.patient_name so /login on a return visit can read it
 // without going through this fallback again.
+// Resolve a signed-in caller from their Supabase access token. Used when a
+// member who is already signed in (for example on /login with no circle yet)
+// redeems an invite code without retyping their password.
+async function resolveSignedInUser(
+  token: string,
+): Promise<{ id: string; email: string; name: string } | null> {
+  if (!token) return null;
+  const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  });
+  if (!r.ok) return null;
+  const u = (await r.json().catch(() => null)) as {
+    id?: string;
+    email?: string;
+    user_metadata?: Record<string, unknown>;
+  } | null;
+  if (!u?.id || typeof u.email !== 'string') return null;
+  const meta = u.user_metadata || {};
+  const full = typeof meta.full_name === 'string' ? meta.full_name.trim() : '';
+  return { id: u.id, email: u.email.toLowerCase(), name: full || u.email.split('@')[0] };
+}
+
 async function resolvePatientName(patientId: string): Promise<string | null> {
   try {
     const r = await fetch(
@@ -269,9 +292,19 @@ export async function POST(req: NextRequest) {
 
     const body = (await req.json()) as RedeemBody;
     const code = (body.code || '').trim().toUpperCase();
-    const email = (body.email || '').trim().toLowerCase();
+
+    // A signed-in caller (Authorization: Bearer <access token>) redeems the
+    // code for their own account; no email or password is needed.
+    const authHeader = req.headers.get('authorization') || '';
+    const bearer = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1]?.trim() || '';
+    const signedIn = bearer ? await resolveSignedInUser(bearer) : null;
+    if (bearer && !signedIn) {
+      return bad('your session has expired. Sign in again, then enter the code.', 401);
+    }
+
+    const email = signedIn ? signedIn.email : (body.email || '').trim().toLowerCase();
     const password = body.password || '';
-    const member_name = (body.member_name || '').trim();
+    const member_name = (body.member_name || '').trim() || (signedIn ? signedIn.name : '');
     const member_phone = (body.member_phone || '').trim() || null;
     const relationship = (body.relationship || '').trim();
     const rawLevel = (body.alert_level || '').trim();
@@ -282,7 +315,9 @@ export async function POST(req: NextRequest) {
     const existingAccount = body.existing_account === true;
     // The new-password policy applies only to accounts created here. An
     // existing account is verified by signing in with its current password.
-    if (existingAccount) {
+    if (signedIn) {
+      // Identity already proven by the access token.
+    } else if (existingAccount) {
       if (!password) return bad('password required');
     } else {
       const pw = validatePassword(password, { email, name: member_name });
@@ -342,7 +377,9 @@ export async function POST(req: NextRequest) {
       return bad('invite has already been redeemed', 410);
     }
 
-    const createRes = existingAccount
+    const createRes = signedIn
+      ? new Response(JSON.stringify({ id: signedIn.id, email: signedIn.email }), { status: 200 })
+      : existingAccount
       ? new Response('User already registered', { status: 422 })
       : await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
       method: 'POST',
@@ -391,8 +428,15 @@ export async function POST(req: NextRequest) {
       if (!existing?.user?.id) {
         // Wrong password for the existing account: do not consume the invite.
         await releaseInvite(invite.id);
+        if (existingAccount) {
+          return bad(
+            'That password does not match the account for this email. Try again, or use Forgot password to reset it.',
+            401,
+            { existing_account: true },
+          );
+        }
         return bad(
-          'an account with this email already exists. Enter your existing password to join this Care Circle.',
+          'You already have an account with this email. Enter your existing password below to join this Care Circle.',
           409,
           { existing_account: true },
         );
@@ -403,7 +447,7 @@ export async function POST(req: NextRequest) {
       const newUser = (await createRes.json()) as { id: string; email: string };
       memberUserId = newUser.id;
       memberEmail = newUser.email;
-      createdUser = true;
+      createdUser = !signedIn;
     }
 
     // Insert care_circle row using CareIQ's columns. The display name goes in
@@ -484,7 +528,7 @@ export async function POST(req: NextRequest) {
       },
     ).catch(() => {});
 
-    const tokenRes = await fetch(
+    const tokenRes = signedIn ? null : await fetch(
       `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
       {
         method: 'POST',
@@ -492,7 +536,7 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({ email, password }),
       },
     );
-    const session = tokenRes.ok ? await tokenRes.json() : null;
+    const session = tokenRes && tokenRes.ok ? await tokenRes.json() : null;
 
     return NextResponse.json(
       {
