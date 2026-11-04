@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { CAREIQ_URL, friendlyVitalsError } from '@/lib/careiq-url';
 import { useRouter } from 'next/navigation';
 import { T, O, PAGE_PAD, SECTION_LABEL, CARD_BG, CARD_BORDER } from './ui';
 import MfaCard from './MfaCard';
@@ -10,8 +11,6 @@ import type { SyncSource } from '@/lib/sync-status';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const CAREIQ_URL =
-  process.env.NEXT_PUBLIC_CAREIQ_URL || 'https://care-iq-sable.vercel.app';
 
 type Severity = 'critical' | 'informational';
 
@@ -635,7 +634,7 @@ export default function FamilyPage() {
                 letterSpacing: '.1em',
               }}
             >
-              {myRow.alert_level === 'critical' ? 'Critical only' : 'All alerts'}
+              Can view readings
             </div>
             <div
               style={{
@@ -753,7 +752,7 @@ export default function FamilyPage() {
           }}
         >
           {vitalsErr
-            ? `Vitals not available: ${vitalsErr}`
+            ? friendlyVitalsError(vitalsErr)
             : vitals === null
             ? 'Loading vitals from CareIQ...'
             : 'No lab values on file. Vitals appear here after the patient enters them in CareIQ.'}

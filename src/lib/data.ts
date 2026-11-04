@@ -187,9 +187,9 @@ export const CAREIQ_DOMAINS = [
 ];
 
 export const CAREIQ_PROTOCOLS = [
-  { name: 'Diabetes Management', pct: 45, color: '#E07A5F', detail: 'A1C target 6.5% — Week 8 of 18' },
-  { name: 'Cardiovascular Defense', pct: 32, color: '#D64045', detail: 'LDL target <130 mg/dL' },
-  { name: 'Blood Pressure Control', pct: 67, color: '#5B8FA8', detail: 'Target <130/80 — Improving' },
+  { name: 'Blood sugar markers', pct: 45, color: '#E07A5F', detail: 'Readings shared from CareIQ' },
+  { name: 'Heart and cholesterol markers', pct: 32, color: '#D64045', detail: 'Readings shared from CareIQ' },
+  { name: 'Blood pressure readings', pct: 67, color: '#5B8FA8', detail: 'Readings shared from CareIQ' },
 ];
 
 export const CAREIQ_INSIGHTS = [

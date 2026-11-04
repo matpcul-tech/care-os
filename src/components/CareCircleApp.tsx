@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { CAREIQ_URL, friendlyVitalsError } from '@/lib/careiq-url';
 import { SafetyDisclaimer, SyncSourceList, useNow } from '@/components/SyncStatus';
 import {
   CHECK_INTERVAL_MS,
@@ -38,8 +39,6 @@ import { loadSession, ensureValidSession, type CCSession } from '@/lib/cc-data';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const CAREIQ_URL =
-  process.env.NEXT_PUBLIC_CAREIQ_URL || 'https://care-iq-sable.vercel.app';
 
 const T = "'DM Mono',monospace";
 const P = "'Playfair Display',serif";
@@ -253,6 +252,14 @@ interface ActiveAlert {
 function flatBiomarkerVal(panel: BiomarkerPanel | undefined, key: string): number | null {
   const e = flatBiomarker(panel, key);
   return e?.value ?? null;
+}
+
+// True when CareIQ returned at least one actual reading for the patient.
+export function hasReadings(s: ShieldPayload | null): boolean {
+  if (!s) return false;
+  const vals = [s.bp_systolic, s.bp_diastolic, s.a1c, s.ldl, s.hdl, s.fasting_glucose, s.triglycerides,
+    s.hr, s.spo2, s.hrv, s.steps, s.sleep_hours, s.active_calories, s.calories];
+  return vals.some((v) => v != null);
 }
 
 function computeAlerts(s: ShieldPayload | null): ActiveAlert[] {
@@ -763,19 +770,19 @@ function PatientCard({
 
 const PROTOCOLS = [
   {
-    name: 'Metabolic Reversal',
+    name: 'Blood sugar markers',
     keys: ['fasting_glucose', 'fasting_insulin', 'homa_ir', 'a1c', 'uric_acid'],
   },
   {
-    name: 'Cardiovascular Defense',
+    name: 'Heart and cholesterol markers',
     keys: ['ldl', 'hdl', 'total_cholesterol', 'triglycerides', 'apob', 'lpa', 'hs_crp', 'homocysteine', 'vldl'],
   },
   {
-    name: 'Longevity Optimization',
+    name: 'Fitness and sleep markers',
     keys: ['biological_age_estimate', 'grip_strength', 'vo2_max', 'resting_hr', 'hrv', 'sleep_score'],
   },
   {
-    name: 'Cognitive Protection',
+    name: 'Memory and thinking markers',
     keys: ['memory_score', 'processing_speed', 'executive_function'],
   },
 ];
@@ -795,25 +802,25 @@ function computeProtocol(panel: BiomarkerPanel | undefined, keys: string[]) {
 }
 
 function protocolSubtitle(name: string, panel: BiomarkerPanel | undefined): string {
-  if (name === 'Metabolic Reversal') {
+  if (name === 'Blood sugar markers') {
     const a1c = flatBiomarker(panel, 'a1c');
-    if (a1c?.value != null) return `Latest A1C ${a1c.value.toFixed(1)}% · target 5.7%`;
-    return 'A1C target 5.7%';
+    if (a1c?.value != null) return `Latest A1C on file: ${a1c.value.toFixed(1)}%`;
+    return 'No A1C on file yet';
   }
-  if (name === 'Cardiovascular Defense') {
+  if (name === 'Heart and cholesterol markers') {
     const ldl = flatBiomarker(panel, 'ldl');
-    if (ldl?.value != null) return `LDL ${Math.round(ldl.value)} mg/dL · target <130`;
-    return 'LDL target <130 mg/dL';
+    if (ldl?.value != null) return `Latest LDL on file: ${Math.round(ldl.value)} mg/dL`;
+    return 'No LDL on file yet';
   }
-  if (name === 'Longevity Optimization') return 'Supplement, sleep, and exercise stack';
-  return 'Brain health markers tracked weekly';
+  if (name === 'Fitness and sleep markers') return 'Readings shared from CareIQ';
+  return 'Readings shared from CareIQ';
 }
 
 function ActiveProtocols({ shield }: { shield: ShieldPayload | null }) {
   return (
     <>
       <div style={{ fontFamily: P, fontSize: 18, color: INK, margin: '8px 0 10px' }}>
-        Active Protocols
+        Marker groups
       </div>
       <div style={{ marginBottom: 16 }}>
         {PROTOCOLS.map((p) => {
@@ -985,10 +992,10 @@ function RiskDomains({ shield }: { shield: ShieldPayload | null }) {
 // =========================================================================
 
 const MED_PROTOCOL_HINTS: Array<{ pattern: RegExp; protocol: string }> = [
-  { pattern: /metformin|jardiance|ozempic|mounjaro|wegovy|glp|insulin|semaglutide|tirzepatide/i, protocol: 'Metabolic Reversal' },
-  { pattern: /lisinopril|amlodipine|losartan|metoprolol|atorvastatin|crestor|rosuvastatin|pravastatin|simvastatin|ezetimibe|repatha|aspirin|clopidogrel|warfarin|eliquis|hydrochlorothiazide|hctz/i, protocol: 'Cardiovascular Defense' },
-  { pattern: /vitamin d|vit d|nmn|nad|rapamycin|spermidine|coq10|omega|fish oil|magnesium|zinc/i, protocol: 'Longevity Optimization' },
-  { pattern: /donepezil|aricept|memantine|namenda|piracetam|lion'?s mane/i, protocol: 'Cognitive Protection' },
+  { pattern: /metformin|jardiance|ozempic|mounjaro|wegovy|glp|insulin|semaglutide|tirzepatide/i, protocol: 'Blood sugar markers' },
+  { pattern: /lisinopril|amlodipine|losartan|metoprolol|atorvastatin|crestor|rosuvastatin|pravastatin|simvastatin|ezetimibe|repatha|aspirin|clopidogrel|warfarin|eliquis|hydrochlorothiazide|hctz/i, protocol: 'Heart and cholesterol markers' },
+  { pattern: /vitamin d|vit d|nmn|nad|rapamycin|spermidine|coq10|omega|fish oil|magnesium|zinc/i, protocol: 'Fitness and sleep markers' },
+  { pattern: /donepezil|aricept|memantine|namenda|piracetam|lion'?s mane/i, protocol: 'Memory and thinking markers' },
 ];
 function inferProtocol(name: string): string {
   for (const r of MED_PROTOCOL_HINTS) if (r.pattern.test(name)) return r.protocol;
@@ -1072,7 +1079,7 @@ function MedsView({ session, router }: { session: CCSession; router: ReturnType<
             <div>
               <div style={{ fontSize: 14, fontWeight: 700, color: INK }}>{taken}/{total} Doses Taken</div>
               <div style={{ fontSize: 11, color: SUB, marginTop: 2 }}>
-                Wearable confirms absorption patterns
+                Doses marked as taken today
               </div>
             </div>
             <div style={{ fontFamily: P, fontSize: 32, fontWeight: 700, color: TEAL }}>{pct}%</div>
@@ -1488,7 +1495,7 @@ function FamilyView({ session, router }: { session: CCSession; router: ReturnTyp
                         letterSpacing: '.1em',
                       }}
                     >
-                      {m.alert_level === 'critical' ? 'Critical' : 'All alerts'}
+                      Can view readings
                     </span>
                     <span style={{ fontFamily: T, fontSize: 8, color: linked ? OK : MUTED }}>
                       {linked ? 'Active' : 'Pending'}
@@ -1755,7 +1762,17 @@ function AlertsView({ shield, shieldLoading }: { shield: ShieldPayload | null; s
         </div>
       )}
 
-      {!shieldLoading && alerts.length === 0 && (
+      {!shieldLoading && alerts.length === 0 && !hasReadings(shield) && (
+        <div
+          data-testid="alerts-no-readings"
+          style={{ background: CARD, border: BORDER, borderRadius: 12, padding: 16, fontSize: 12, color: SUB, lineHeight: 1.6 }}
+        >
+          <div style={{ fontSize: 13, color: INK, fontWeight: 700, marginBottom: 2 }}>No readings yet</div>
+          Notes appear here after the patient shares readings from CareIQ.
+        </div>
+      )}
+
+      {!shieldLoading && alerts.length === 0 && hasReadings(shield) && (
         <div
           style={{
             background: 'rgba(74,222,128,0.06)',
@@ -1881,7 +1898,11 @@ function AlertRow({ alert }: { alert: ActiveAlert }) {
 // =========================================================================
 
 type TabId = 'home' | 'alerts' | 'meds' | 'cal' | 'family' | 'ai';
-const NAV: Array<{ id: TabId; icon: string; label: string }> = [
+// AI features (Health OS chat, Shield banner) stay hidden unless the
+// operator turns them on with NEXT_PUBLIC_AI_ENABLED=true.
+const AI_ENABLED = process.env.NEXT_PUBLIC_AI_ENABLED === 'true';
+
+const ALL_NAV: Array<{ id: TabId; icon: string; label: string }> = [
   { id: 'home', icon: '⌂', label: 'Home' },
   { id: 'alerts', icon: '⚠', label: 'Alerts' },
   { id: 'meds', icon: '☥', label: 'Meds' },
@@ -1889,6 +1910,7 @@ const NAV: Array<{ id: TabId; icon: string; label: string }> = [
   { id: 'family', icon: '♤', label: 'Family' },
   { id: 'ai', icon: '☸', label: 'Health OS' },
 ];
+const NAV = ALL_NAV.filter((n) => AI_ENABLED || n.id !== 'ai');
 
 export default function CareCircleApp() {
   const router = useRouter();
@@ -1983,6 +2005,7 @@ export default function CareCircleApp() {
       case 'family':
         return <FamilyView session={session} router={router} />;
       case 'ai':
+        if (!AI_ENABLED) return null;
         return <AIView session={session} router={router} />;
       case 'home':
       default:
@@ -2007,7 +2030,7 @@ export default function CareCircleApp() {
         .sov-hdr{position:relative;z-index:10;flex-shrink:0;padding:14px 18px 12px;background:rgba(10,22,40,0.92);backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,0.06)}
         .sov-scroll{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;position:relative;z-index:1}
         .sov-pad{padding:14px 18px calc(96px + env(safe-area-inset-bottom,0px))}
-        .sov-bnav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(10,22,40,0.97);backdrop-filter:blur(20px);border-top:1px solid rgba(255,255,255,0.06);display:grid;grid-template-columns:repeat(6,1fr);padding:8px 4px calc(10px + env(safe-area-inset-bottom,0px));z-index:20}
+        .sov-bnav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(10,22,40,0.97);backdrop-filter:blur(20px);border-top:1px solid rgba(255,255,255,0.06);display:grid;grid-template-columns:repeat(${NAV.length},1fr);padding:8px 4px calc(10px + env(safe-area-inset-bottom,0px));z-index:20}
         .sov-bnav-btn{background:transparent;border:none;color:#7a9bbf;font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 4px;border-radius:9px;transition:color .2s;min-height:50px;justify-content:center;position:relative}
         .sov-bnav-btn.on{color:${TEAL}}
         .sov-bnav-btn.on::before{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:32px;height:2px;background:linear-gradient(90deg,${TEAL},${TEAL2});border-radius:0 0 2px 2px}
@@ -2050,6 +2073,7 @@ export default function CareCircleApp() {
                 </div>
               </div>
             </div>
+            {AI_ENABLED && (
             <div
               style={{
                 display: 'inline-flex',
@@ -2080,6 +2104,7 @@ export default function CareCircleApp() {
               />
               Shield On
             </div>
+            )}
           </div>
         </div>
 
@@ -2096,14 +2121,14 @@ export default function CareCircleApp() {
               lineHeight: 1.5,
             }}
           >
-            Vitals not available: {shieldErr}
+            {friendlyVitalsError(shieldErr)}
           </div>
         )}
 
         <div className="sov-scroll">
           <div className="sov-pad">
             <LiveWearableStrip shield={shield} />
-            <ShieldBanner />
+            {AI_ENABLED && <ShieldBanner />}
             {renderTab()}
             <div style={{ padding: '12px 0 0' }}>
               <button

@@ -138,6 +138,7 @@ export default function AppPage() {
               Full Dashboard
               <span aria-hidden style={{ fontSize: 12, lineHeight: 1 }}>›</span>
             </Link>
+            {process.env.NEXT_PUBLIC_AI_ENABLED === 'true' && (
             <div
               style={{
                 display: 'inline-flex',
@@ -161,6 +162,7 @@ export default function AppPage() {
               />
               Shield On
             </div>
+            )}
           </div>
         </div>
       </header>

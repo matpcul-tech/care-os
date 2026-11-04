@@ -185,7 +185,7 @@ export default function HomePage({
             marginBottom: 12,
           }}
         >
-          No alerts on file. All monitored vitals are within safe range.
+          No alerts on file yet.
         </div>
       ) : null}
 

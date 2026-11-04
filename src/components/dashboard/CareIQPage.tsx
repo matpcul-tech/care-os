@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { CAREIQ_URL, friendlyVitalsError } from '@/lib/careiq-url';
 import {
   sbAuthed,
   fmtTime,
@@ -10,8 +11,6 @@ import { T, PAGE_PAD, SECTION_LABEL, CARD_BG, CARD_BORDER } from './ui';
 import { SafetyDisclaimer, SyncSourceList } from '@/components/SyncStatus';
 import type { SyncSource } from '@/lib/sync-status';
 
-const CAREIQ_URL =
-  process.env.NEXT_PUBLIC_CAREIQ_URL || 'https://care-iq-sable.vercel.app';
 
 // ---------------------------------------------------------------------------
 // Shield decrypt response shape (longevity biomarker panel + legacy fields).
@@ -745,7 +744,7 @@ export default function CareIQPage({ session }: { session: CCSession }) {
           </div>
           <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.5, marginBottom: 6 }}>
             {vitalsErr
-              ? `Vitals not available: ${vitalsErr}`
+              ? friendlyVitalsError(vitalsErr)
               : payload?.updated_at
               ? `Last updated ${fmtTime(payload.updated_at)}`
               : 'No labs entered yet'}
